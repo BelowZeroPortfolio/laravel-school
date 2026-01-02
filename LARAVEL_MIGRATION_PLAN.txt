@@ -1,0 +1,1606 @@
+================================================================================
+                    LARAVEL MIGRATION PLAN - QR ATTENDANCE SYSTEM
+================================================================================
+                              Version: 1.0
+                              Date: January 2, 2026
+================================================================================
+
+================================================================================
+SECTION 1: CURRENT SYSTEM BEHAVIOR SUMMARY
+================================================================================
+
+1.1 AUTHENTICATION FLOW
+-----------------------
+- Session-based authentication using PHP native sessions
+- Login triggers:
+  * Session creation with user_id, username, role, full_name
+  * Session record stored in `sessions` table
+  * For TEACHERS: Automatic call to recordTeacherTimeIn() - creates PENDING attendance
+- Logout triggers:
+  * For TEACHERS: Automatic call to recordTeacherTimeOut() - records time_out
+  * Session destruction and database cleanup
+
+1.2 ROLE-BASED ACCESS CONTROL
+-----------------------------
+Roles: admin, principal, teacher (stored in users.role ENUM)
+
+Role Hierarchy:
+- Admin: Full access to everything
+- Principal: Read-only monitoring + most teacher features (cannot manage users/settings)
+- Teacher: Limited to own classes, students, attendance scanning
+
+Key Functions:
+- hasRole($role) - Admin always returns true
+- requireRole($role) - Redirects if insufficient permissions
+- requireAnyRole($roles) - Allows multiple acceptable roles
+
+1.3 TEACHER ATTENDANCE MODEL (TWO-PHASE)
+----------------------------------------
+Phase 1 - INTENT (Login):
+- Teacher login creates/updates teacher_attendance record
+- Sets time_in = NOW()
+- Sets attendance_status = 'pending'
+- Does NOT evaluate lateness yet
+
+Phase 2 - PRESENCE CONFIRMATION (First Student Scan):
+- When ANY student in teacher's class scans QR
+- Records first_student_scan timestamp
+- Locks time_rule_id (the active schedule at that moment)
+- Calls finalizeTeacherAttendance() to evaluate lateness
+
+1.4 LATE DETERMINATION LOGIC (STRICT - DO NOT MODIFY)
+-----------------------------------------------------
+Teacher is LATE if ANY of these conditions are true:
+  1. teacher_time_in > (time_in_rule + grace_period)
+  2. first_student_scan > (time_in_rule + grace_period)
+  3. Teacher never logged in but students scanned
+
+Teacher is ON_TIME if:
+  - teacher_time_in <= cutoff AND first_student_scan <= cutoff
+
+Cutoff Time = time_in_rule + late_threshold_minutes
+
+1.5 STUDENT ATTENDANCE FLOW
+---------------------------
+- Student scans QR code (LRN barcode)
+- System finds student by LRN or student_id
+- Checks for duplicate scan today
+- Auto-calculates late status using active time_schedule
+- Records attendance with school_year_id
+- Triggers first_student_scan for teacher if applicable
+- Sends SMS notification if student.sms_enabled = 1
+
+1.6 TIME RULE MANAGEMENT
+------------------------
+- Admin creates/edits time_schedules (name, time_in, time_out, late_threshold_minutes)
+- Only ONE schedule can be active at a time
+- Changes are logged to time_schedule_logs (audit trail)
+- Historical records preserve time_rule_id used at evaluation time
+- NEVER recalculate past attendance when rules change
+
+1.7 ATTENDANCE STATES
+---------------------
+Teacher Attendance Status:
+- pending: Logged in, awaiting student scan
+- confirmed: On time (finalized)
+- late: Late (finalized)
+- no_scan: Logged in but no students scanned (end of day)
+- absent: Never logged in (end of day)
+
+Student Attendance Status:
+- present: On time
+- late: After grace period
+- absent: No scan (manual marking)
+
+================================================================================
+SECTION 2: DATABASE SCHEMA (LARAVEL MIGRATIONS)
+================================================================================
+
+2.1 MIGRATION ORDER (Dependencies)
+----------------------------------
+1. users
+2. school_years
+3. school_settings
+4. time_schedules
+5. time_schedule_logs
+6. students
+7. classes
+8. student_classes
+9. attendance
+10. teacher_attendance
+11. notification_logs
+12. retry_queue
+13. sessions
+14. system_logs
+
+2.2 TABLE MAPPINGS (Old → Laravel)
+----------------------------------
+
+TABLE: users
+------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+username VARCHAR(50)    | $table->string('username', 50)->unique();
+password_hash VARCHAR   | $table->string('password');  // Laravel uses 'password'
+role ENUM               | $table->enum('role', ['admin', 'principal', 'teacher'])->default('teacher');
+full_name VARCHAR(100)  | $table->string('full_name', 100);
+email VARCHAR(100)      | $table->string('email', 100)->nullable();
+is_active TINYINT       | $table->boolean('is_active')->default(true);
+is_premium TINYINT      | $table->boolean('is_premium')->default(false);
+premium_expires_at DATE | $table->date('premium_expires_at')->nullable();
+last_login TIMESTAMP    | $table->timestamp('last_login')->nullable();
+created_at TIMESTAMP    | $table->timestamps();
+updated_at TIMESTAMP    | (included in timestamps)
+
+TABLE: school_years
+-------------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+name VARCHAR(9)         | $table->string('name', 9)->unique();
+is_active TINYINT       | $table->boolean('is_active')->default(false);
+is_locked TINYINT       | $table->boolean('is_locked')->default(false);
+start_date DATE         | $table->date('start_date')->nullable();
+end_date DATE           | $table->date('end_date')->nullable();
+created_at/updated_at   | $table->timestamps();
+
+TABLE: time_schedules
+---------------------
+Old Column                  | Laravel Migration
+----------------------------|------------------------------------------
+id INT(11)                  | $table->id();
+name VARCHAR(100)           | $table->string('name', 100);
+time_in TIME                | $table->time('time_in');
+time_out TIME               | $table->time('time_out');
+late_threshold_minutes INT  | $table->integer('late_threshold_minutes')->default(0);
+is_active TINYINT           | $table->boolean('is_active')->default(false);
+effective_date DATE         | $table->date('effective_date')->nullable();
+created_by INT              | $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
+created_at/updated_at       | $table->timestamps();
+
+TABLE: time_schedule_logs
+-------------------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+schedule_id INT         | $table->foreignId('schedule_id')->nullable()->constrained('time_schedules')->nullOnDelete();
+action ENUM             | $table->enum('action', ['create', 'update', 'delete', 'activate', 'deactivate']);
+changed_by INT          | $table->foreignId('changed_by')->constrained('users')->cascadeOnDelete();
+old_values JSON         | $table->json('old_values')->nullable();
+new_values JSON         | $table->json('new_values')->nullable();
+change_reason VARCHAR   | $table->string('change_reason', 255)->nullable();
+created_at TIMESTAMP    | $table->timestamp('created_at')->useCurrent();
+
+TABLE: students
+---------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+student_id VARCHAR(20)  | $table->string('student_id', 20)->unique();
+lrn VARCHAR(12)         | $table->string('lrn', 12)->unique()->nullable();
+first_name VARCHAR(50)  | $table->string('first_name', 50);
+last_name VARCHAR(50)   | $table->string('last_name', 50);
+barcode_path VARCHAR    | $table->string('barcode_path', 255)->nullable();
+photo_path VARCHAR      | $table->string('photo_path', 255)->nullable();
+parent_name VARCHAR     | $table->string('parent_name', 100)->nullable();
+parent_phone VARCHAR    | $table->string('parent_phone', 20)->nullable();
+parent_email VARCHAR    | $table->string('parent_email', 100)->nullable();
+address TEXT            | $table->text('address')->nullable();
+date_of_birth DATE      | $table->date('date_of_birth')->nullable();
+is_active TINYINT       | $table->boolean('is_active')->default(true);
+sms_enabled TINYINT     | $table->boolean('sms_enabled')->default(false);
+previous_school VARCHAR | $table->string('previous_school', 255)->nullable();
+created_at/updated_at   | $table->timestamps();
+
+TABLE: classes
+--------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+grade_level VARCHAR(20) | $table->string('grade_level', 20);
+section VARCHAR(50)     | $table->string('section', 50);
+teacher_id INT          | $table->foreignId('teacher_id')->constrained('users');
+school_year_id INT      | $table->foreignId('school_year_id')->constrained('school_years');
+is_active TINYINT       | $table->boolean('is_active')->default(true);
+max_capacity INT        | $table->integer('max_capacity')->default(50);
+created_at/updated_at   | $table->timestamps();
+UNIQUE                  | $table->unique(['grade_level', 'section', 'school_year_id']);
+
+TABLE: student_classes (Pivot)
+------------------------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+student_id INT          | $table->foreignId('student_id')->constrained('students');
+class_id INT            | $table->foreignId('class_id')->constrained('classes');
+enrolled_at TIMESTAMP   | $table->timestamp('enrolled_at')->useCurrent();
+enrolled_by INT         | $table->foreignId('enrolled_by')->nullable()->constrained('users');
+is_active TINYINT       | $table->boolean('is_active')->default(true);
+enrollment_type ENUM    | $table->enum('enrollment_type', ['regular', 'transferee', 'returnee', 'repeater'])->default('regular');
+enrollment_status ENUM  | $table->enum('enrollment_status', ['active', 'withdrawn', 'dropped', 'transferred_out', 'completed'])->default('active');
+status_changed_at DT    | $table->datetime('status_changed_at')->nullable();
+status_changed_by INT   | $table->unsignedInteger('status_changed_by')->nullable();
+status_reason VARCHAR   | $table->string('status_reason', 255)->nullable();
+UNIQUE                  | $table->unique(['student_id', 'class_id']);
+
+TABLE: attendance (Student)
+---------------------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+student_id INT          | $table->foreignId('student_id')->constrained('students');
+school_year_id INT      | $table->foreignId('school_year_id')->nullable()->constrained('school_years');
+attendance_date DATE    | $table->date('attendance_date');
+check_in_time TIMESTAMP | $table->timestamp('check_in_time')->useCurrent();
+check_out_time TIMESTAMP| $table->timestamp('check_out_time')->nullable();
+status ENUM             | $table->enum('status', ['present', 'late', 'absent'])->default('present');
+recorded_by INT         | $table->foreignId('recorded_by')->nullable()->constrained('users');
+notes TEXT              | $table->text('notes')->nullable();
+UNIQUE                  | $table->unique(['student_id', 'attendance_date']);
+INDEXES                 | idx_date, idx_student_date, idx_status, idx_school_year
+
+TABLE: teacher_attendance
+-------------------------
+Old Column              | Laravel Migration
+------------------------|------------------------------------------
+id INT(11)              | $table->id();
+teacher_id INT          | $table->foreignId('teacher_id')->constrained('users')->cascadeOnDelete();
+school_year_id INT      | $table->foreignId('school_year_id')->constrained('school_years')->cascadeOnDelete();
+attendance_date DATE    | $table->date('attendance_date');
+time_in DATETIME        | $table->datetime('time_in')->nullable();
+time_out DATETIME       | $table->datetime('time_out')->nullable();
+first_student_scan DT   | $table->datetime('first_student_scan')->nullable();
+attendance_status ENUM  | $table->enum('attendance_status', ['pending', 'confirmed', 'late', 'no_scan', 'absent'])->default('pending');
+late_status ENUM        | $table->enum('late_status', ['on_time', 'late'])->nullable();
+time_rule_id INT        | $table->foreignId('time_rule_id')->nullable()->constrained('time_schedules');
+notes TEXT              | $table->text('notes')->nullable();
+created_at/updated_at   | $table->timestamps();
+UNIQUE                  | $table->unique(['teacher_id', 'attendance_date']);
+
+================================================================================
+SECTION 3: ELOQUENT MODELS WITH RELATIONSHIPS
+================================================================================
+
+3.1 MODEL LIST
+--------------
+- User
+- SchoolYear
+- SchoolSetting
+- TimeSchedule
+- TimeScheduleLog
+- Student
+- ClassRoom (avoid reserved word 'Class')
+- StudentClass (Pivot with extra columns)
+- Attendance
+- TeacherAttendance
+- NotificationLog
+- RetryQueue
+- SystemLog
+
+3.2 KEY RELATIONSHIPS
+---------------------
+
+User Model:
+-----------
+- hasMany(ClassRoom::class, 'teacher_id')           // Classes taught
+- hasMany(TeacherAttendance::class, 'teacher_id')   // Teacher attendance records
+- hasMany(Attendance::class, 'recorded_by')         // Attendance recorded by user
+- hasMany(TimeSchedule::class, 'created_by')        // Schedules created
+- hasMany(TimeScheduleLog::class, 'changed_by')     // Schedule changes made
+
+SchoolYear Model:
+-----------------
+- hasMany(ClassRoom::class)
+- hasMany(Attendance::class)
+- hasMany(TeacherAttendance::class)
+
+TimeSchedule Model:
+-------------------
+- belongsTo(User::class, 'created_by')
+- hasMany(TimeScheduleLog::class, 'schedule_id')
+- hasMany(TeacherAttendance::class, 'time_rule_id')
+
+Student Model:
+--------------
+- hasMany(Attendance::class)
+- belongsToMany(ClassRoom::class, 'student_classes', 'student_id', 'class_id')
+    ->withPivot(['enrolled_at', 'enrolled_by', 'is_active', 'enrollment_type', 'enrollment_status'])
+    ->withTimestamps()
+- hasMany(NotificationLog::class)
+
+ClassRoom Model:
+----------------
+- belongsTo(User::class, 'teacher_id')
+- belongsTo(SchoolYear::class)
+- belongsToMany(Student::class, 'student_classes', 'class_id', 'student_id')
+    ->withPivot([...])
+
+Attendance Model:
+-----------------
+- belongsTo(Student::class)
+- belongsTo(SchoolYear::class)
+- belongsTo(User::class, 'recorded_by')
+
+TeacherAttendance Model:
+------------------------
+- belongsTo(User::class, 'teacher_id')
+- belongsTo(SchoolYear::class)
+- belongsTo(TimeSchedule::class, 'time_rule_id')
+
+3.3 MODEL SCOPES (Examples)
+---------------------------
+User:
+- scopeTeachers($query) => $query->where('role', 'teacher')
+- scopeActive($query) => $query->where('is_active', true)
+
+SchoolYear:
+- scopeActive($query) => $query->where('is_active', true)
+
+TimeSchedule:
+- scopeActive($query) => $query->where('is_active', true)
+
+Attendance:
+- scopeToday($query) => $query->whereDate('attendance_date', today())
+- scopeForSchoolYear($query, $id) => $query->where('school_year_id', $id)
+
+TeacherAttendance:
+- scopePending($query) => $query->where('attendance_status', 'pending')
+- scopeLate($query) => $query->where('attendance_status', 'late')
+
+================================================================================
+SECTION 4: SERVICE CLASSES
+================================================================================
+
+4.1 TeacherAttendanceService
+----------------------------
+Location: app/Services/TeacherAttendanceService.php
+
+Methods:
+--------
+recordTimeIn(int $teacherId, ?int $schoolYearId = null): bool
+    - Called on teacher login
+    - Creates/updates daily record with time_in
+    - Sets status to 'pending'
+    - Does NOT evaluate lateness
+
+recordTimeOut(int $teacherId): bool
+    - Called on teacher logout
+    - Updates time_out for today's record
+
+recordFirstStudentScan(int $teacherId, Carbon $scanTime): bool
+    - Called when student in teacher's class scans
+    - Only processes if first_student_scan is null
+    - Locks time_rule_id
+    - Calls finalizeAttendance()
+
+finalizeAttendance(int $teacherId, string $date): void
+    - Evaluates lateness against locked time rule
+    - LATE if: teacher_time_in > cutoff OR first_student_scan > cutoff
+    - Updates attendance_status and late_status
+
+markAbsentTeachers(?int $schoolYearId = null): int
+    - Cron job: End of day
+    - Creates 'absent' records for teachers who never logged in
+
+markNoScanTeachers(): int
+    - Cron job: After class hours
+    - Updates 'pending' to 'no_scan' for teachers with login but no student scans
+
+getAttendanceRecords(array $filters): Collection
+    - Filterable by: teacher_id, school_year_id, date range, status
+
+getSummary(int $teacherId, ?int $schoolYearId): array
+    - Returns counts: total_days, confirmed, late, pending, absent
+
+4.2 StudentAttendanceService
+----------------------------
+Location: app/Services/StudentAttendanceService.php
+
+Methods:
+--------
+findStudentByBarcode(string $barcode): ?Student
+    - Searches by LRN first, then student_id
+    - Includes current class info via eager loading
+
+hasAttendanceToday(int $studentId): bool
+    - Checks for existing attendance record today
+
+recordAttendance(int $studentId, ?string $status = null): array|false
+    - Auto-calculates late status if null
+    - Uses active TimeSchedule for evaluation
+    - Records school_year_id
+    - Triggers teacher first_student_scan if applicable
+    - Returns ['success' => true, 'status' => 'present|late', 'late_info' => [...]]
+
+recordCheckout(int $studentId): bool
+    - Updates check_out_time for dismissal
+
+processBarcodeScan(string $barcode, string $mode = 'arrival'): array
+    - Main entry point for QR scanning
+    - Handles both arrival and dismissal modes
+    - Returns structured result with student info, status, notifications
+
+calculateLateStatus(string $checkTime): array
+    - Uses active TimeSchedule
+    - Returns ['is_late' => bool, 'minutes_late' => int, 'schedule' => [...]]
+
+getAttendanceByDate(string $date, ?int $schoolYearId, ?int $classId, ?int $teacherId): Collection
+getAttendanceStats(string $startDate, string $endDate, ...filters): array
+getRecentAttendance(int $page, int $perPage, ...filters): LengthAwarePaginator
+
+4.3 TimeScheduleService
+-----------------------
+Location: app/Services/TimeScheduleService.php
+
+Methods:
+--------
+getActive(): ?TimeSchedule
+    - Returns currently active schedule
+    - Considers effective_date
+
+create(array $data, int $userId): TimeSchedule
+    - Creates new schedule
+    - Deactivates others if is_active = true
+    - Logs to time_schedule_logs
+
+update(int $id, array $data, int $userId, ?string $reason): bool
+    - Updates schedule
+    - Logs old/new values
+
+activate(int $id, int $userId): bool
+    - Activates specific schedule
+    - Deactivates all others
+
+delete(int $id, int $userId): bool
+    - Prevents deleting active schedule
+    - Logs deletion
+
+getChangeLogs(?int $scheduleId, int $limit): Collection
+
+================================================================================
+SECTION 5: AUTHENTICATION FLOW (LOGIN/LOGOUT HOOKS)
+================================================================================
+
+5.1 CUSTOM LOGIN LOGIC
+----------------------
+Location: app/Http/Controllers/Auth/LoginController.php (or custom)
+
+Override authenticated() method:
+```php
+protected function authenticated(Request $request, $user)
+{
+    // Record teacher time in
+    if ($user->role === 'teacher') {
+        app(TeacherAttendanceService::class)->recordTimeIn($user->id);
+    }
+    
+    return redirect()->intended($this->redirectPath());
+}
+```
+
+5.2 CUSTOM LOGOUT LOGIC
+-----------------------
+Override logout() method or use event listener:
+
+Option A - Controller Override:
+```php
+public function logout(Request $request)
+{
+    $user = Auth::user();
+    
+    // Record teacher time out BEFORE logout
+    if ($user && $user->role === 'teacher') {
+        app(TeacherAttendanceService::class)->recordTimeOut($user->id);
+    }
+    
+    Auth::logout();
+    $request->session()->invalidate();
+    $request->session()->regenerateToken();
+    
+    return redirect('/');
+}
+```
+
+Option B - Event Listener:
+```php
+// EventServiceProvider
+protected $listen = [
+    Logout::class => [
+        RecordTeacherTimeOut::class,
+    ],
+];
+
+// Listener
+public function handle(Logout $event)
+{
+    if ($event->user && $event->user->role === 'teacher') {
+        app(TeacherAttendanceService::class)->recordTimeOut($event->user->id);
+    }
+}
+```
+
+5.3 SESSION CONFIGURATION
+-------------------------
+config/session.php:
+- driver: database (to match existing sessions table)
+- lifetime: 120 (2 hours = 7200 seconds / 60)
+- expire_on_close: false
+
+================================================================================
+SECTION 6: MIDDLEWARE FOR ROLE-BASED ACCESS
+================================================================================
+
+6.1 ROLE MIDDLEWARE
+-------------------
+Location: app/Http/Middleware/CheckRole.php
+
+```php
+class CheckRole
+{
+    public function handle(Request $request, Closure $next, ...$roles)
+    {
+        if (!Auth::check()) {
+            return redirect()->route('login');
+        }
+        
+        $user = Auth::user();
+        
+        // Admin has access to everything
+        if ($user->role === 'admin') {
+            return $next($request);
+        }
+        
+        // Principal has access to teacher-level features
+        if ($user->role === 'principal' && in_array('teacher', $roles)) {
+            return $next($request);
+        }
+        
+        // Check specific role
+        if (in_array($user->role, $roles)) {
+            return $next($request);
+        }
+        
+        abort(403, 'Unauthorized access');
+    }
+}
+```
+
+Register in Kernel.php:
+```php
+protected $middlewareAliases = [
+    'role' => \App\Http\Middleware\CheckRole::class,
+];
+```
+
+6.2 USAGE IN ROUTES
+-------------------
+```php
+// Admin only
+Route::middleware(['auth', 'role:admin'])->group(function () {
+    Route::resource('users', UserController::class);
+    Route::resource('time-schedules', TimeScheduleController::class);
+});
+
+// Admin or Principal
+Route::middleware(['auth', 'role:admin,principal'])->group(function () {
+    Route::get('/teacher-monitoring', [TeacherMonitoringController::class, 'index']);
+});
+
+// Admin, Principal, or Teacher
+Route::middleware(['auth', 'role:admin,principal,teacher'])->group(function () {
+    Route::get('/scan', [ScanController::class, 'index']);
+    Route::post('/scan', [ScanController::class, 'process']);
+});
+```
+
+6.3 BLADE DIRECTIVES
+--------------------
+```php
+// AppServiceProvider boot()
+Blade::if('role', function ($role) {
+    return Auth::check() && (
+        Auth::user()->role === 'admin' ||
+        Auth::user()->role === $role ||
+        (Auth::user()->role === 'principal' && $role === 'teacher')
+    );
+});
+
+Blade::if('admin', function () {
+    return Auth::check() && Auth::user()->role === 'admin';
+});
+
+Blade::if('principal', function () {
+    return Auth::check() && in_array(Auth::user()->role, ['admin', 'principal']);
+});
+
+Blade::if('teacher', function () {
+    return Auth::check() && Auth::user()->role === 'teacher';
+});
+```
+
+Usage in Blade:
+```blade
+@admin
+    <a href="/users">Manage Users</a>
+@endadmin
+
+@principal
+    <a href="/teacher-monitoring">Teacher Monitoring</a>
+@endprincipal
+```
+
+================================================================================
+SECTION 7: CONTROLLERS (THIN CONTROLLERS)
+================================================================================
+
+7.1 CONTROLLER LIST
+-------------------
+- Auth/LoginController
+- Auth/LogoutController
+- DashboardController
+- ScanController
+- StudentController
+- ClassController
+- AttendanceController
+- TeacherMonitoringController (Principal view)
+- TimeScheduleController (Admin)
+- UserController (Admin)
+- SchoolYearController (Admin)
+- ReportController
+
+7.2 EXAMPLE: ScanController
+---------------------------
+```php
+class ScanController extends Controller
+{
+    public function __construct(
+        private StudentAttendanceService $attendanceService
+    ) {}
+    
+    public function index()
+    {
+        $activeSchedule = app(TimeScheduleService::class)->getActive();
+        $mode = request('mode', 'arrival');
+        
+        return view('scan.index', compact('activeSchedule', 'mode'));
+    }
+    
+    public function process(ScanRequest $request)
+    {
+        $result = $this->attendanceService->processBarcodeScan(
+            $request->barcode,
+            $request->mode
+        );
+        
+        return redirect()->back()->with('scan_result', $result);
+    }
+}
+```
+
+7.3 EXAMPLE: TeacherMonitoringController
+----------------------------------------
+```php
+class TeacherMonitoringController extends Controller
+{
+    public function __construct(
+        private TeacherAttendanceService $teacherAttendance
+    ) {}
+    
+    public function index(Request $request)
+    {
+        $filters = $request->only([
+            'teacher_id', 'school_year_id', 'start_date', 
+            'end_date', 'attendance_status', 'search'
+        ]);
+        
+        $records = $this->teacherAttendance->getAttendanceRecords($filters);
+        $teachers = User::teachers()->active()->get();
+        $schoolYears = SchoolYear::orderByDesc('name')->get();
+        
+        // Stats calculation
+        $stats = [
+            'confirmed' => $records->where('attendance_status', 'confirmed')->count(),
+            'late' => $records->where('attendance_status', 'late')->count(),
+            'pending' => $records->where('attendance_status', 'pending')->count(),
+            'absent' => $records->where('attendance_status', 'absent')->count(),
+        ];
+        
+        return view('teacher-monitoring.index', compact(
+            'records', 'teachers', 'schoolYears', 'stats', 'filters'
+        ));
+    }
+}
+```
+
+================================================================================
+SECTION 8: BLADE VIEW STRUCTURE
+================================================================================
+
+8.1 DIRECTORY STRUCTURE
+-----------------------
+resources/views/
+├── layouts/
+│   ├── app.blade.php           (Main authenticated layout)
+│   ├── guest.blade.php         (Login/public pages)
+│   └── partials/
+│       ├── header.blade.php
+│       ├── sidebar.blade.php
+│       └── footer.blade.php
+├── auth/
+│   ├── login.blade.php
+│   └── forgot-password.blade.php
+├── dashboard/
+│   └── index.blade.php
+├── scan/
+│   └── index.blade.php
+├── students/
+│   ├── index.blade.php
+│   ├── create.blade.php
+│   ├── edit.blade.php
+│   └── show.blade.php
+├── classes/
+│   ├── index.blade.php
+│   ├── create.blade.php
+│   └── edit.blade.php
+├── attendance/
+│   ├── index.blade.php         (Daily attendance view)
+│   └── history.blade.php
+├── teacher-monitoring/
+│   └── index.blade.php         (Principal read-only view)
+├── time-schedules/
+│   ├── index.blade.php
+│   ├── create.blade.php
+│   └── edit.blade.php
+├── users/
+│   ├── index.blade.php
+│   ├── create.blade.php
+│   └── edit.blade.php
+├── school-years/
+│   ├── index.blade.php
+│   └── create.blade.php
+├── reports/
+│   └── index.blade.php
+└── components/
+    ├── alert.blade.php
+    ├── badge.blade.php
+    ├── card.blade.php
+    └── pagination.blade.php
+
+================================================================================
+SECTION 9: FILE MAPPING (OLD PHP → LARAVEL)
+================================================================================
+
+9.1 INCLUDES → SERVICES/HELPERS
+-------------------------------
+includes/auth.php           → app/Services/AuthService.php (or Laravel Auth)
+                            → app/Http/Middleware/CheckRole.php
+includes/attendance.php     → app/Services/StudentAttendanceService.php
+includes/teacher-attendance.php → app/Services/TeacherAttendanceService.php
+includes/time-schedules.php → app/Services/TimeScheduleService.php
+includes/classes.php        → app/Services/ClassService.php
+includes/schoolyear.php     → app/Services/SchoolYearService.php
+includes/notifications.php  → app/Services/NotificationService.php
+includes/barcode.php        → app/Services/BarcodeService.php
+includes/reports.php        → app/Services/ReportService.php
+includes/export-csv.php     → app/Exports/AttendanceExport.php (Laravel Excel)
+includes/export-pdf.php     → app/Services/PdfExportService.php (DomPDF)
+includes/db.php             → Eloquent ORM (no direct replacement needed)
+includes/functions.php      → app/Helpers/helpers.php
+includes/csrf.php           → Laravel CSRF (built-in)
+includes/logger.php         → Laravel Log facade
+includes/retry.php          → app/Jobs/RetryNotificationJob.php
+
+9.2 PAGES → CONTROLLERS + VIEWS
+-------------------------------
+pages/login.php             → Auth/LoginController + views/auth/login.blade.php
+pages/dashboard.php         → DashboardController@index + views/dashboard/index.blade.php
+pages/students.php          → StudentController@index + views/students/index.blade.php
+pages/student-add.php       → StudentController@create + views/students/create.blade.php
+pages/student-view.php      → StudentController@show + views/students/show.blade.php
+pages/classes.php           → ClassController@index + views/classes/index.blade.php
+pages/teacher-monitoring.php → TeacherMonitoringController@index + views/teacher-monitoring/index.blade.php
+pages/reports.php           → ReportController@index + views/reports/index.blade.php
+pages/users.php             → UserController@index + views/users/index.blade.php
+pages/logs.php              → SystemLogController@index + views/logs/index.blade.php
+pages/generate-id.php       → StudentIdController@generate
+pages/student-placement.php → PlacementController@index
+
+9.3 ROOT FILES → ROUTES/CONTROLLERS
+-----------------------------------
+index.php                   → routes/web.php (redirect to login/dashboard)
+scan.php                    → ScanController + views/scan/index.blade.php
+
+9.4 CONFIG → LARAVEL CONFIG
+---------------------------
+config/config.php           → config/app.php, .env
+config/config.dev.php       → .env.local
+config/config.prod.php      → .env.production
+
+================================================================================
+SECTION 10: CRON JOBS (SCHEDULED TASKS)
+================================================================================
+
+10.1 LARAVEL SCHEDULER
+----------------------
+Location: app/Console/Kernel.php
+
+```php
+protected function schedule(Schedule $schedule)
+{
+    // Mark absent teachers at end of school day (5:30 PM)
+    $schedule->call(function () {
+        app(TeacherAttendanceService::class)->markAbsentTeachers();
+    })->dailyAt('17:30')->name('mark-absent-teachers');
+    
+    // Mark no-scan teachers after class hours (6:00 PM)
+    $schedule->call(function () {
+        app(TeacherAttendanceService::class)->markNoScanTeachers();
+    })->dailyAt('18:00')->name('mark-no-scan-teachers');
+    
+    // Process notification retry queue
+    $schedule->job(new ProcessRetryQueue)->everyFiveMinutes();
+    
+    // Clean expired sessions
+    $schedule->command('session:gc')->daily();
+}
+```
+
+10.2 CRON ENTRY (Server)
+------------------------
+* * * * * cd /path-to-project && php artisan schedule:run >> /dev/null 2>&1
+
+================================================================================
+SECTION 11: POLICIES (AUTHORIZATION)
+================================================================================
+
+11.1 POLICY LIST
+----------------
+- UserPolicy
+- StudentPolicy
+- ClassRoomPolicy
+- AttendancePolicy
+- TimeSchedulePolicy
+- SchoolYearPolicy
+
+11.2 EXAMPLE: StudentPolicy
+---------------------------
+```php
+class StudentPolicy
+{
+    // Admin can do everything
+    public function before(User $user, $ability)
+    {
+        if ($user->role === 'admin') {
+            return true;
+        }
+    }
+    
+    public function viewAny(User $user)
+    {
+        return in_array($user->role, ['admin', 'principal', 'teacher']);
+    }
+    
+    public function view(User $user, Student $student)
+    {
+        // Teachers can only view students in their classes
+        if ($user->role === 'teacher') {
+            return $student->classes()
+                ->where('teacher_id', $user->id)
+                ->exists();
+        }
+        return true;
+    }
+    
+    public function create(User $user)
+    {
+        return in_array($user->role, ['admin', 'teacher']);
+    }
+    
+    public function update(User $user, Student $student)
+    {
+        if ($user->role === 'teacher') {
+            return $student->classes()
+                ->where('teacher_id', $user->id)
+                ->exists();
+        }
+        return $user->role === 'admin';
+    }
+    
+    public function delete(User $user, Student $student)
+    {
+        return $user->role === 'admin';
+    }
+}
+```
+
+11.3 EXAMPLE: TimeSchedulePolicy
+--------------------------------
+```php
+class TimeSchedulePolicy
+{
+    // Only admin can manage time schedules
+    public function viewAny(User $user)
+    {
+        return in_array($user->role, ['admin', 'principal']);
+    }
+    
+    public function view(User $user, TimeSchedule $schedule)
+    {
+        return in_array($user->role, ['admin', 'principal']);
+    }
+    
+    public function create(User $user)
+    {
+        return $user->role === 'admin';
+    }
+    
+    public function update(User $user, TimeSchedule $schedule)
+    {
+        return $user->role === 'admin';
+    }
+    
+    public function delete(User $user, TimeSchedule $schedule)
+    {
+        return $user->role === 'admin';
+    }
+}
+```
+
+================================================================================
+SECTION 12: IMPORTANT CONSTRAINTS (DO NOT VIOLATE)
+================================================================================
+
+12.1 BUSINESS LOGIC CONSTRAINTS
+-------------------------------
+✗ DO NOT simplify the two-phase teacher attendance model
+✗ DO NOT merge admin/principal/teacher roles
+✗ DO NOT remove any attendance states (pending, confirmed, late, no_scan, absent)
+✗ DO NOT recalculate historical records when time rules change
+✗ DO NOT change the late determination logic
+✗ DO NOT remove time_rule_id locking on teacher attendance
+
+12.2 DATA INTEGRITY CONSTRAINTS
+-------------------------------
+✓ Preserve all foreign key relationships
+✓ Maintain unique constraints (student per day, teacher per day)
+✓ Keep audit trail for time schedule changes
+✓ Store time_rule_id at evaluation time (historical accuracy)
+✓ All timestamps must be server-side (not client-side)
+
+12.3 FEATURE PARITY REQUIREMENTS
+--------------------------------
+✓ Teacher login = automatic time_in recording
+✓ Teacher logout = automatic time_out recording
+✓ First student scan = presence confirmation + late evaluation
+✓ Student scan = auto late calculation based on active schedule
+✓ Principal view = read-only monitoring
+✓ Admin = full CRUD on time schedules with audit logging
+
+================================================================================
+SECTION 13: MIGRATION CHECKLIST
+================================================================================
+
+Phase 1: Foundation
+-------------------
+[ ] Create Laravel 10+ project
+[ ] Configure database connection
+[ ] Create all migrations in correct order
+[ ] Create Eloquent models with relationships
+[ ] Set up authentication (Laravel Breeze/Fortify)
+[ ] Implement role middleware
+
+Phase 2: Core Services
+----------------------
+[ ] Implement TimeScheduleService
+[ ] Implement TeacherAttendanceService
+[ ] Implement StudentAttendanceService
+[ ] Add login/logout hooks for teacher attendance
+[ ] Create scheduled tasks for absent/no-scan marking
+
+Phase 3: Controllers & Views
+----------------------------
+[ ] Create all controllers (thin)
+[ ] Create Blade layouts and partials
+[ ] Implement all views matching current UI
+[ ] Add CSRF protection (automatic in Laravel)
+
+Phase 4: Features
+-----------------
+[ ] QR scanning page
+[ ] Student management
+[ ] Class management
+[ ] Teacher monitoring (Principal view)
+[ ] Time schedule management (Admin)
+[ ] Reports and exports
+
+Phase 5: Testing & Migration
+----------------------------
+[ ] Write feature tests for critical flows
+[ ] Data migration script from old database
+[ ] Parallel testing with old system
+[ ] Cutover plan
+
+================================================================================
+SECTION 14: ASSUMPTIONS & CLARIFICATIONS NEEDED
+================================================================================
+
+14.1 ASSUMPTIONS MADE
+---------------------
+1. Laravel 10+ with PHP 8.1+ requirement
+2. Using Laravel's built-in session driver (database)
+3. Tailwind CSS for frontend (matching current system)
+4. SMS notifications via external service (Semaphore based on code)
+5. Barcode generation using existing library approach
+
+14.2 CLARIFICATIONS NEEDED
+--------------------------
+1. Should premium features be migrated as-is or simplified?
+2. Is the notification retry queue critical for MVP?
+3. Should we implement API endpoints for mobile app?
+4. What is the expected concurrent user load?
+5. Should we implement real-time updates (WebSockets)?
+
+================================================================================
+                              END OF MIGRATION PLAN
+================================================================================
+
+
+================================================================================
+SECTION 15: UI THEME SYSTEM (DARK/LIGHT MODE)
+================================================================================
+
+15.1 THEME ARCHITECTURE
+-----------------------
+The system uses CSS custom properties (variables) for theming with JavaScript toggle.
+
+CSS Variables (Light Mode - Default):
+-------------------------------------
+:root {
+    --bg-primary: #f9fafb;
+    --bg-secondary: rgba(255, 255, 255, 0.8);
+    --bg-card: rgba(255, 255, 255, 0.9);
+    --bg-card-hover: rgb(255, 255, 255);
+    --text-primary: #111827;
+    --text-secondary: #374151;
+    --text-muted: #6b7280;
+    --border-color: rgba(229, 231, 235, 1);
+    --shadow-color: rgba(0, 0, 0, 0.05);
+}
+
+CSS Variables (Dark Mode):
+--------------------------
+.dark-mode {
+    --bg-primary: #111827;
+    --bg-secondary: rgba(17, 24, 39, 0.8);
+    --bg-card: rgba(31, 41, 55, 0.9);
+    --bg-card-hover: rgb(31, 41, 55);
+    --text-primary: #ffffff;
+    --text-secondary: #d1d5db;
+    --text-muted: #9ca3af;
+    --border-color: rgba(255, 255, 255, 0.1);
+    --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+15.2 THEME UTILITY CLASSES
+--------------------------
+.theme-bg-primary    → background-color: var(--bg-primary)
+.theme-bg-secondary  → background-color: var(--bg-secondary)
+.theme-bg-card       → background-color: var(--bg-card)
+.theme-text-primary  → color: var(--text-primary)
+.theme-text-secondary → color: var(--text-secondary)
+.theme-text-muted    → color: var(--text-muted)
+.theme-border        → border-color: var(--border-color)
+
+Conditional Display Classes:
+.dark-only  → display: block (dark mode), display: none (light mode)
+.light-only → display: block (light mode), display: none (dark mode)
+
+15.3 THEME TOGGLE JAVASCRIPT
+----------------------------
+// On page load - check localStorage
+const savedTheme = localStorage.getItem('theme');
+const isPublicPage = ['/login', '/scan', '/'].some(p => window.location.pathname.includes(p));
+const defaultTheme = isPublicPage ? 'dark' : 'light';
+const theme = savedTheme || defaultTheme;
+
+if (theme === 'dark') {
+    document.documentElement.classList.add('dark-mode');
+}
+
+// Toggle function
+function toggleTheme() {
+    const html = document.documentElement;
+    if (html.classList.contains('dark-mode')) {
+        html.classList.remove('dark-mode');
+        localStorage.setItem('theme', 'light');
+    } else {
+        html.classList.add('dark-mode');
+        localStorage.setItem('theme', 'dark');
+    }
+}
+
+15.4 LARAVEL IMPLEMENTATION
+---------------------------
+Location: resources/css/theme.css (or in app.css)
+
+Blade Component: resources/views/components/theme-toggle.blade.php
+```blade
+<button id="themeToggle" class="p-2 rounded-lg hover:bg-gray-100 dark-mode:hover:bg-gray-700 transition-colors">
+    {{-- Sun icon (dark mode) --}}
+    <svg class="w-5 h-5 text-yellow-500 dark-only" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/>
+    </svg>
+    {{-- Moon icon (light mode) --}}
+    <svg class="w-5 h-5 text-gray-700 light-only" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/>
+    </svg>
+</button>
+```
+
+15.5 DARK MODE OVERRIDES
+------------------------
+Key Tailwind class overrides for dark mode:
+- .dark-mode .bg-white → rgb(31, 41, 55)
+- .dark-mode .bg-gray-50 → rgb(17, 24, 39)
+- .dark-mode .text-gray-900 → #f9fafb
+- .dark-mode .text-gray-600 → #d1d5db
+- .dark-mode .border-gray-100 → rgba(255, 255, 255, 0.1)
+- .dark-mode input/textarea/select → bg: rgb(55, 65, 81), border: rgba(255, 255, 255, 0.2)
+
+Status Badge Colors (Dark Mode):
+- .dark-mode .bg-green-100 → rgba(34, 197, 94, 0.2)
+- .dark-mode .bg-amber-100 → rgba(245, 158, 11, 0.2)
+- .dark-mode .bg-red-100 → rgba(239, 68, 68, 0.2)
+- .dark-mode .bg-violet-50 → rgba(139, 92, 246, 0.15)
+
+================================================================================
+SECTION 16: HEADER COMPONENT
+================================================================================
+
+16.1 HEADER STRUCTURE
+---------------------
+Fixed top navigation bar that adjusts based on sidebar state.
+
+Key Elements:
+- Mobile menu toggle (hamburger icon) - left side on mobile
+- School Year Selector dropdown - shows active year with badge
+- Theme Toggle button (sun/moon icons)
+- Premium/Free badge (for teachers only)
+- User Menu dropdown (avatar, name, role, logout)
+
+16.2 HEADER FEATURES
+--------------------
+1. School Year Selector:
+   - Displays current active school year
+   - Dropdown shows all school years with "Active" badge
+   - Admin gets "Manage School Years" link
+
+2. User Menu:
+   - Avatar with first letter of name
+   - Full name and role display
+   - Premium/Free badge for teachers
+   - Sign Out link
+
+3. Responsive Behavior:
+   - Adjusts margin based on sidebar collapsed state
+   - Mobile: hamburger menu appears, some elements hidden
+
+16.3 LARAVEL BLADE COMPONENT
+----------------------------
+Location: resources/views/layouts/partials/header.blade.php
+
+```blade
+<nav class="theme-bg-card theme-border border-b fixed top-0 left-0 right-0 z-40 transition-all duration-300"
+     :class="sidebarCollapsed ? 'md:ml-20' : 'md:ml-64'">
+    <div class="px-4 sm:px-6 lg:px-8 max-w-full">
+        <div class="flex justify-end items-center h-16 max-w-full">
+            {{-- Mobile menu button --}}
+            <button @click="mobileSidebarOpen = !mobileSidebarOpen" 
+                    class="md:hidden absolute left-4 p-2 rounded-lg theme-text-muted hover:bg-gray-50">
+                <x-icons.menu class="h-5 w-5" />
+            </button>
+            
+            <div class="flex items-center gap-2">
+                {{-- School Year Selector --}}
+                <x-school-year-selector :active="$activeSchoolYear" :all="$schoolYears" />
+                
+                {{-- Theme Toggle --}}
+                <x-theme-toggle />
+                
+                {{-- Premium Badge (teachers only) --}}
+                @if(auth()->user()->role === 'teacher')
+                    <x-premium-badge :premium="auth()->user()->is_premium" />
+                @endif
+                
+                {{-- User Menu --}}
+                <x-user-menu :user="auth()->user()" />
+            </div>
+        </div>
+    </div>
+</nav>
+```
+
+================================================================================
+SECTION 17: SIDEBAR COMPONENT
+================================================================================
+
+17.1 SIDEBAR STRUCTURE
+----------------------
+Fixed left sidebar with collapsible functionality.
+
+States:
+- Expanded: 256px (w-64) - shows icons + text
+- Collapsed: 80px (w-20) - shows icons only with tooltips
+- Mobile: Full overlay with close button
+
+17.2 MENU SECTIONS (Role-Based)
+-------------------------------
+MAIN Section:
+- Dashboard (all roles)
+- Scan Attendance (admin, teacher only - NOT principal)
+
+STUDENT MANAGEMENT Section (admin, principal, teacher):
+- Classes / My Class (teacher sees "My Class")
+- Students / My Students (teacher sees "My Students")
+- Generate ID Cards (admin only)
+
+ATTENDANCE & REPORTS Section (all roles):
+- Attendance
+- Reports
+
+ADMINISTRATION Section (admin, principal):
+- Teacher Monitoring (admin, principal)
+- Users (admin only)
+- School Years (admin only)
+- Student Placement (admin only)
+- System Logs (admin only)
+- Subscriptions (admin only)
+- Time Schedules (admin, principal)
+- Settings (admin only)
+
+17.3 SIDEBAR FEATURES
+---------------------
+1. Collapsible:
+   - Toggle button in logo section
+   - Collapsed state shows icons with hover tooltips
+   - State persists via Alpine.js
+
+2. Active State Highlighting:
+   - Current page gets violet background (bg-violet-50)
+   - Icon color changes to violet-600
+
+3. Section Headers:
+   - Uppercase, small text (10px)
+   - Gray color, tracking-wider
+   - Hidden when collapsed (replaced with divider line)
+
+4. Tooltips (Collapsed Mode):
+   - Appear on hover
+   - Position: left-full ml-2
+   - Dark background, white text
+
+17.4 LARAVEL BLADE COMPONENT
+----------------------------
+Location: resources/views/layouts/partials/sidebar.blade.php
+
+Menu Item Component: resources/views/components/sidebar-item.blade.php
+```blade
+@props(['href', 'icon', 'label', 'active' => false])
+
+<div class="mb-1" x-data="{ tooltip: false }">
+    <a href="{{ $href }}"
+       @mouseenter="tooltip = sidebarCollapsed"
+       @mouseleave="tooltip = false"
+       class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-xl transition-all relative
+              {{ $active ? 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300' : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700' }}"
+       :class="sidebarCollapsed ? 'justify-center' : ''">
+        <x-dynamic-component :component="'icons.' . $icon" 
+            class="w-5 h-5 flex-shrink-0 {{ $active ? 'text-violet-600' : 'text-gray-400' }}" />
+        <span x-show="!sidebarCollapsed" x-transition class="whitespace-nowrap">{{ $label }}</span>
+        <div x-show="tooltip" x-transition 
+             class="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap z-50">
+            {{ $label }}
+        </div>
+    </a>
+</div>
+```
+
+================================================================================
+SECTION 18: FOOTER COMPONENT
+================================================================================
+
+18.1 FOOTER STRUCTURE
+---------------------
+Simple footer that adjusts based on sidebar state.
+
+Elements:
+- Copyright text with year and app name
+- Links: Help, Privacy, Terms
+
+18.2 LARAVEL BLADE COMPONENT
+----------------------------
+Location: resources/views/layouts/partials/footer.blade.php
+
+```blade
+<footer class="theme-bg-card theme-border border-t mt-auto transition-all duration-300"
+        :class="sidebarCollapsed ? 'md:ml-20' : 'md:ml-64'">
+    <div class="py-4 px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-col md:flex-row justify-between items-center text-sm theme-text-muted">
+            <div class="mb-2 md:mb-0">
+                &copy; {{ date('Y') }} {{ config('app.name') }}. All rights reserved.
+            </div>
+            <div class="flex space-x-4">
+                <a href="{{ route('help') }}" class="hover:text-violet-600 transition-colors">Help</a>
+                <a href="{{ route('privacy') }}" class="hover:text-violet-600 transition-colors">Privacy</a>
+                <a href="{{ route('terms') }}" class="hover:text-violet-600 transition-colors">Terms</a>
+            </div>
+        </div>
+    </div>
+</footer>
+```
+
+================================================================================
+SECTION 19: DECORATIVE BACKGROUND (LIGHT MODE)
+================================================================================
+
+19.1 BACKGROUND ELEMENTS
+------------------------
+Light mode features animated gradient blobs for visual appeal.
+
+Main Background:
+- Linear gradient: #faf5ff → #f3e8ff → #ede9fe → #f5f3ff → #faf5ff
+- Two pseudo-elements (::before, ::after) with radial gradients
+- Floating animation (20-25s duration)
+
+Accent Blobs:
+- Two additional floating elements
+- Positioned at 30% top/10% left and 60% top/15% right
+- Subtle violet/purple radial gradients
+- 30s animation with delays
+
+19.2 CSS IMPLEMENTATION
+-----------------------
+```css
+.page-background {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: -1;
+    background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 25%, #ede9fe 50%, #f5f3ff 75%, #faf5ff 100%);
+}
+
+.page-background::before {
+    content: '';
+    position: absolute;
+    top: -20%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: float 20s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25% { transform: translate(20px, -20px) scale(1.05); }
+    50% { transform: translate(-10px, 20px) scale(0.95); }
+    75% { transform: translate(-20px, -10px) scale(1.02); }
+}
+
+/* Hide in dark mode */
+.dark-mode .page-background,
+.dark-mode .blob-accent {
+    display: none;
+}
+```
+
+================================================================================
+SECTION 20: UPDATED CLARIFICATIONS & REQUIREMENTS
+================================================================================
+
+20.1 ANSWERED QUESTIONS
+-----------------------
+Q1: Should premium features be migrated as-is or simplified?
+A1: MIGRATE AS-IS
+    - Keep is_premium flag on users
+    - Keep premium_expires_at date
+    - Admin/Principal always have premium access
+    - Teachers check premium status for advanced features
+    - Premium badge display in header/user menu
+
+Q2: Is the notification retry queue critical for MVP?
+A2: NO - Skip for MVP
+    - Remove retry_queue table migration
+    - Remove RetryQueue model
+    - Remove ProcessRetryQueue job
+    - Notifications send once, failures logged but not retried
+
+Q3: Should we implement API endpoints for mobile app?
+A3: NO - Web only
+    - No API routes needed
+    - No API authentication (Sanctum/Passport)
+    - Focus on Blade views only
+
+Q4: What is the expected concurrent user load?
+A4: 3000 students, 100 teachers, 1 principal
+    - Total potential concurrent: ~3100 users
+    - Peak load during morning scan: ~500-1000 concurrent
+    - Database optimization required
+    - Consider queue for SMS notifications
+    - Index optimization critical
+
+Q5: Should we implement real-time updates (WebSockets)?
+A5: YES - Implement WebSockets
+    - Use Laravel Reverb (Laravel 11+) or Pusher
+    - Real-time attendance dashboard updates
+    - Live scan notifications
+    - Teacher monitoring live updates
+
+20.2 WEBSOCKET IMPLEMENTATION PLAN
+----------------------------------
+Package: Laravel Reverb (recommended) or Pusher
+
+Events to Broadcast:
+1. StudentScanned - When student QR is scanned
+   - Broadcast to: dashboard, attendance-history
+   - Data: student_id, name, status, time, class
+
+2. TeacherLoggedIn - When teacher logs in
+   - Broadcast to: teacher-monitoring
+   - Data: teacher_id, name, time_in
+
+3. TeacherLoggedOut - When teacher logs out
+   - Broadcast to: teacher-monitoring
+   - Data: teacher_id, name, time_out
+
+4. AttendanceFinalized - When teacher attendance is finalized
+   - Broadcast to: teacher-monitoring
+   - Data: teacher_id, status, late_status
+
+Channels:
+- attendance.{school_year_id} - For attendance updates
+- teacher-monitoring.{school_year_id} - For teacher status
+- dashboard.{user_id} - For user-specific updates
+
+Frontend:
+- Laravel Echo for WebSocket client
+- Alpine.js integration for reactive updates
+
+20.3 PERFORMANCE OPTIMIZATIONS
+------------------------------
+For 3000+ students:
+
+Database:
+- Add composite indexes on frequently queried columns
+- Use eager loading (with()) to prevent N+1 queries
+- Implement query caching for school years, time schedules
+- Partition attendance table by school_year_id (optional)
+
+Queries:
+- Use chunking for bulk operations
+- Implement pagination everywhere (20-50 per page)
+- Cache active school year (1 hour TTL)
+- Cache active time schedule (1 hour TTL)
+
+Session:
+- Use Redis for session storage (recommended)
+- Or database with cleanup cron
+
+QR Scanning:
+- Debounce duplicate scans (1.5s)
+- Async SMS notifications via queue
+- Optimistic UI updates
+
+20.4 UPDATED MIGRATION CHECKLIST
+--------------------------------
+Phase 1: Foundation
+[ ] Create Laravel 11 project (for Reverb support)
+[ ] Configure database connection
+[ ] Create all migrations (skip retry_queue)
+[ ] Create Eloquent models with relationships
+[ ] Set up authentication (Laravel Breeze)
+[ ] Implement role middleware
+[ ] Configure Redis for sessions/cache
+
+Phase 2: Core Services
+[ ] Implement TimeScheduleService
+[ ] Implement TeacherAttendanceService
+[ ] Implement StudentAttendanceService
+[ ] Add login/logout hooks for teacher attendance
+[ ] Create scheduled tasks for absent/no-scan marking
+[ ] Implement premium feature checks
+
+Phase 3: UI Components
+[ ] Set up Tailwind CSS with custom theme
+[ ] Create theme system (dark/light mode)
+[ ] Create layout components (header, sidebar, footer)
+[ ] Implement decorative background
+[ ] Create reusable Blade components
+
+Phase 4: Controllers & Views
+[ ] Create all controllers (thin)
+[ ] Implement all views matching current UI
+[ ] Add CSRF protection (automatic)
+[ ] Implement form validation
+
+Phase 5: Real-Time Features
+[ ] Install and configure Laravel Reverb
+[ ] Create broadcast events
+[ ] Set up Laravel Echo on frontend
+[ ] Implement real-time dashboard updates
+[ ] Implement live teacher monitoring
+
+Phase 6: Testing & Optimization
+[ ] Write feature tests for critical flows
+[ ] Load testing for 3000+ users
+[ ] Query optimization
+[ ] Index tuning
+[ ] Data migration script
+
+================================================================================
+SECTION 21: LARAVEL 11 SPECIFIC NOTES
+================================================================================
+
+21.1 DIRECTORY STRUCTURE CHANGES
+--------------------------------
+Laravel 11 has simplified structure:
+- No more app/Http/Kernel.php (use bootstrap/app.php)
+- No more app/Providers/ by default (use bootstrap/providers.php)
+- Middleware registered in bootstrap/app.php
+
+21.2 MIDDLEWARE REGISTRATION
+----------------------------
+bootstrap/app.php:
+```php
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+    )
+    ->withMiddleware(function (Middleware $middleware) {
+        $middleware->alias([
+            'role' => \App\Http\Middleware\CheckRole::class,
+        ]);
+    })
+    ->withExceptions(function (Exceptions $exceptions) {
+        //
+    })->create();
+```
+
+21.3 REVERB SETUP
+-----------------
+```bash
+php artisan install:broadcasting
+```
+
+config/broadcasting.php - Reverb is default in Laravel 11
+
+.env:
+```
+BROADCAST_CONNECTION=reverb
+REVERB_APP_ID=your-app-id
+REVERB_APP_KEY=your-app-key
+REVERB_APP_SECRET=your-app-secret
+REVERB_HOST="localhost"
+REVERB_PORT=8080
+REVERB_SCHEME=http
+```
+
+================================================================================
+                         END OF MIGRATION PLAN (UPDATED)
+================================================================================
+
+Document Version: 1.1
+Last Updated: January 2, 2026
+Total Sections: 21
+
+Key Updates in v1.1:
+- Added UI Theme System documentation (Section 15)
+- Added Header Component documentation (Section 16)
+- Added Sidebar Component documentation (Section 17)
+- Added Footer Component documentation (Section 18)
+- Added Decorative Background documentation (Section 19)
+- Updated clarifications with user answers (Section 20)
+- Added WebSocket implementation plan
+- Added performance optimization guidelines
+- Added Laravel 11 specific notes (Section 21)
+- Removed notification retry queue from scope
+- Added real-time features to checklist
