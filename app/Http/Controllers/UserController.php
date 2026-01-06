@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\AuditLogService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -97,6 +98,12 @@ class UserController extends Controller
         $validated['school_id'] = $currentUser->school_id;
 
         $user = User::create($validated);
+
+        AuditLogService::sensitiveOperation('user_created', [
+            'created_user_id' => $user->id,
+            'created_username' => $user->username,
+            'role' => $user->role,
+        ]);
 
         return redirect()->route('users.show', $user)
             ->with('success', 'User created successfully.');
@@ -196,6 +203,11 @@ class UserController extends Controller
         // Soft-delete by deactivating
         $user->update(['is_active' => false]);
 
+        AuditLogService::sensitiveOperation('user_deactivated', [
+            'target_user_id' => $user->id,
+            'target_username' => $user->username,
+        ]);
+
         return redirect()->route('users.index')
             ->with('success', 'User deactivated successfully.');
     }
@@ -209,6 +221,11 @@ class UserController extends Controller
         $this->authorizeSchoolAccess($request->user(), $user);
 
         $user->update(['is_active' => true]);
+
+        AuditLogService::sensitiveOperation('user_reactivated', [
+            'target_user_id' => $user->id,
+            'target_username' => $user->username,
+        ]);
 
         return redirect()->route('users.show', $user)
             ->with('success', 'User reactivated successfully.');
@@ -228,6 +245,11 @@ class UserController extends Controller
 
         $user->update([
             'password' => Hash::make($validated['password']),
+        ]);
+
+        AuditLogService::sensitiveOperation('password_reset', [
+            'target_user_id' => $user->id,
+            'target_username' => $user->username,
         ]);
 
         return redirect()->route('users.show', $user)

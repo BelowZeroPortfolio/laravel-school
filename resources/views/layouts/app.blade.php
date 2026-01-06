@@ -1,11 +1,15 @@
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" x-data="{ darkMode: localStorage.getItem('theme') === 'dark' || (!localStorage.getItem('theme') && !{{ auth()->check() ? 'true' : 'false' }}) }" :class="{ 'dark': darkMode }">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="h-full">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <title>{{ config('app.name', 'QR Attendance System') }} - @yield('title', 'Dashboard')</title>
+    <title>{{ config('app.name', 'Lexite PH') }} - @yield('title', 'Dashboard')</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="{{ asset('images/lex.png') }}">
+    <link rel="apple-touch-icon" href="{{ asset('images/lex.png') }}">
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.bunny.net">
@@ -17,15 +21,36 @@
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     
-    <style>[x-cloak] { display: none !important; }</style>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+    
+    <!-- Prevent FOUC for dark mode -->
+    <script>
+        (function() {
+            const theme = localStorage.getItem('theme');
+            const isAuth = true;
+            if (theme === 'dark' || (!theme && !isAuth)) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
 </head>
 <body class="font-sans antialiased bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen" data-authenticated="true">
-    <div x-data="{ sidebarOpen: false }" class="flex h-screen overflow-hidden">
+    <div x-data="{ 
+            sidebarOpen: false, 
+            sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
+            darkMode: localStorage.getItem('theme') === 'dark'
+         }" 
+         x-init="$watch('sidebarCollapsed', val => localStorage.setItem('sidebarCollapsed', val))"
+         @toggle-dark-mode.window="darkMode = !darkMode; localStorage.setItem('theme', darkMode ? 'dark' : 'light'); document.documentElement.classList.toggle('dark', darkMode)"
+         class="flex h-screen overflow-hidden">
         <!-- Sidebar -->
         <x-sidebar />
 
         <!-- Main Content -->
-        <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 flex flex-col overflow-hidden transition-all duration-300"
+             :class="sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'">
             <!-- Header -->
             <x-header />
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Services\AuditLogService;
 use App\Services\TeacherAttendanceService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,6 +26,9 @@ class LogoutController extends Controller
     public function logout(Request $request): RedirectResponse
     {
         $user = Auth::user();
+
+        // Log logout event before destroying session
+        AuditLogService::authEvent('logout');
 
         // Record teacher time_out before logout (Requirement 1.3)
         if ($user && $user->isTeacher()) {

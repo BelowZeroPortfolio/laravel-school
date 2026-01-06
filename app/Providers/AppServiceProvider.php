@@ -12,6 +12,7 @@ use App\Policies\StudentPolicy;
 use App\Policies\TimeSchedulePolicy;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rules\Password;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -41,6 +42,7 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->registerPolicies();
+        $this->configurePasswordValidation();
     }
 
     /**
@@ -51,5 +53,23 @@ class AppServiceProvider extends ServiceProvider
         foreach ($this->policies as $model => $policy) {
             Gate::policy($model, $policy);
         }
+    }
+
+    /**
+     * Configure password validation defaults.
+     */
+    protected function configurePasswordValidation(): void
+    {
+        Password::defaults(function () {
+            $rule = Password::min(8)
+                ->letters()
+                ->mixedCase()
+                ->numbers();
+
+            // Add stricter rules in production
+            return $this->app->isProduction()
+                ? $rule->symbols()->uncompromised()
+                : $rule;
+        });
     }
 }

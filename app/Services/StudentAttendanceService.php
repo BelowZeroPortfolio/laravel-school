@@ -192,17 +192,31 @@ class StudentAttendanceService
         }
 
         // Handle departure mode
-        return $this->recordCheckout($student->id)
-            ? [
-                'success' => true,
-                'message' => 'Checkout recorded successfully.',
-                'student' => $student,
-            ]
-            : [
+        $checkoutResult = $this->recordCheckout($student->id);
+        
+        if (!$checkoutResult['success']) {
+            if ($checkoutResult['error_code'] === 'ALREADY_CHECKED_OUT') {
+                return [
+                    'success' => false,
+                    'message' => 'Already checked out at ' . $checkoutResult['check_out_time'],
+                    'error_code' => 'ALREADY_CHECKED_OUT',
+                    'student' => $student,
+                ];
+            }
+            return [
                 'success' => false,
-                'message' => 'No attendance record found for today.',
+                'message' => 'No check-in record found for today. Student must check in first.',
                 'error_code' => 'NO_ATTENDANCE_RECORD',
+                'student' => $student,
             ];
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Checkout recorded successfully.',
+            'student' => $student,
+            'check_out_time' => $checkoutResult['check_out_time'],
+        ];
     }
 
 
@@ -248,23 +262,39 @@ class StudentAttendanceService
      * Record checkout for a student.
      *
      * @param int $studentId The student's ID
-     * @return bool True if successful
+     * @return array Result array with success status and data
      */
-    public function recordCheckout(int $studentId): bool
+    public function recordCheckout(int $studentId): array
     {
         $attendance = Attendance::where('student_id', $studentId)
             ->whereDate('attendance_date', Carbon::today())
             ->first();
 
         if (!$attendance) {
-            return false;
+            return [
+                'success' => false,
+                'error_code' => 'NO_ATTENDANCE_RECORD',
+            ];
         }
 
+        // Check if already checked out
+        if ($attendance->check_out_time !== null) {
+            return [
+                'success' => false,
+                'error_code' => 'ALREADY_CHECKED_OUT',
+                'check_out_time' => $attendance->check_out_time->format('h:i A'),
+            ];
+        }
+
+        $now = Carbon::now();
         $attendance->update([
-            'check_out_time' => Carbon::now(),
+            'check_out_time' => $now,
         ]);
 
-        return true;
+        return [
+            'success' => true,
+            'check_out_time' => $now->format('h:i A'),
+        ];
     }
 
     /**

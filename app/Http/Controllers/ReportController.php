@@ -130,10 +130,10 @@ class ReportController extends Controller
     }
 
     /**
-     * Export attendance report to PDF format.
+     * Export attendance report to Excel format.
      * (Requirement 17.4)
      */
-    public function exportPdf(Request $request): Response
+    public function exportExcel(Request $request): StreamedResponse
     {
         $user = $request->user();
 
@@ -156,17 +156,53 @@ class ReportController extends Controller
         // Get records for export
         $records = $this->reportService->getAttendanceRecordsForExport($filters);
 
-        // Generate PDF file
-        $filePath = $this->reportService->exportToPdf($records, $filters);
+        // Generate filename for download - use .csv extension which Excel opens properly
+        $downloadFilename = 'attendance_report_' . now()->format('Y-m-d') . '.csv';
 
-        // Generate filename for download
-        $downloadFilename = 'attendance_report_' . now()->format('Y-m-d') . '.pdf';
+        // Return streamed response for Excel download
+        return response()->streamDownload(function () use ($records) {
+            $output = fopen('php://output', 'w');
 
-        // Return response for download
-        $content = \Illuminate\Support\Facades\Storage::disk('public')->get($filePath);
+            // Add BOM for Excel UTF-8 compatibility
+            fwrite($output, "\xEF\xBB\xBF");
 
-        return response($content, 200, [
-            'Content-Type' => 'application/pdf',
+            // Header row
+            fputcsv($output, [
+                'Date',
+                'Student ID',
+                'LRN',
+                'Student Name',
+                'Grade Level',
+                'Section',
+                'Check In',
+                'Check Out',
+                'Status',
+                'Recorded By',
+            ]);
+
+            // Data rows
+            foreach ($records as $record) {
+                $studentClass = $record->student?->classes()
+                    ->where('student_classes.is_active', true)
+                    ->first();
+
+                fputcsv($output, [
+                    $record->attendance_date?->format('Y-m-d') ?? '',
+                    $record->student?->student_id ?? '',
+                    $record->student?->lrn ?? '',
+                    $record->student?->full_name ?? '',
+                    $studentClass?->grade_level ?? '',
+                    $studentClass?->section ?? '',
+                    $record->check_in_time?->format('H:i:s') ?? '',
+                    $record->check_out_time?->format('H:i:s') ?? '',
+                    ucfirst($record->status ?? ''),
+                    $record->recorder?->full_name ?? '',
+                ]);
+            }
+
+            fclose($output);
+        }, $downloadFilename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="' . $downloadFilename . '"',
         ]);
     }

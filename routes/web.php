@@ -59,6 +59,7 @@ Route::middleware('auth')->group(function () {
 Route::middleware('auth')->group(function () {
     // Dashboard (Requirement 1.1)
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('/dashboard/live-stats', [DashboardController::class, 'liveStats'])->name('dashboard.live-stats');
 
     // QR Code Scanning (Requirement 6.1)
     Route::get('/scan', [ScanController::class, 'index'])->name('scan.index');
@@ -93,7 +94,7 @@ Route::middleware('auth')->group(function () {
     // Reports (Requirements 17.1, 17.3, 17.4, 17.5)
     Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/export/csv', [ReportController::class, 'exportCsv'])->name('reports.export.csv');
-    Route::get('/reports/export/pdf', [ReportController::class, 'exportPdf'])->name('reports.export.pdf');
+    Route::get('/reports/export/excel', [ReportController::class, 'exportExcel'])->name('reports.export.excel');
     Route::get('/reports/daily-summary', [ReportController::class, 'dailySummary'])->name('reports.daily-summary');
 
     // Student Placement (Requirements 19.1, 19.2, 19.3, 19.5)
