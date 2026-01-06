@@ -26,7 +26,7 @@ class StudentController extends Controller
         // Role-based filtering (Requirements 8.2, 8.3)
         if ($user->isTeacher()) {
             // Teachers see only students in their classes (Requirement 8.2)
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $query->whereHas('classes', fn($q) => $q->whereIn('classes.id', $teacherClassIds));
         }
         // Admins and principals see all students (Requirement 8.3)
@@ -81,18 +81,40 @@ class StudentController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        $user = $request->user();
+
+        // LRN and student_id should be unique per school
         $validated = $request->validate([
-            'first_name' => ['required', 'string', 'max:255'],
-            'last_name' => ['required', 'string', 'max:255'],
-            'lrn' => ['nullable', 'string', 'max:12', 'unique:students,lrn'],
-            'parent_name' => ['nullable', 'string', 'max:255'],
-            'parent_phone' => ['nullable', 'string', 'max:20'],
+            'first_name' => ['required', 'string', 'min:2', 'max:50'],
+            'last_name' => ['required', 'string', 'min:2', 'max:50'],
+            'lrn' => [
+                'required',
+                'string',
+                'size:12',
+                'regex:/^[0-9]+$/',
+                Rule::unique('students')->where(function ($query) use ($user) {
+                    return $query->where('school_id', $user->school_id);
+                }),
+            ],
+            'parent_name' => ['nullable', 'string', 'min:2', 'max:100'],
+            'parent_phone' => ['nullable', 'string', 'size:11', 'regex:/^09[0-9]{9}$/'],
             'parent_email' => ['nullable', 'email', 'max:255'],
             'address' => ['nullable', 'string', 'max:500'],
             'is_active' => ['boolean'],
             'sms_enabled' => ['boolean'],
             'class_ids' => ['nullable', 'array'],
             'class_ids.*' => ['exists:classes,id'],
+        ], [
+            'first_name.min' => 'First name must be at least 2 characters.',
+            'first_name.max' => 'First name must not exceed 50 characters.',
+            'last_name.min' => 'Last name must be at least 2 characters.',
+            'last_name.max' => 'Last name must not exceed 50 characters.',
+            'lrn.size' => 'LRN must be exactly 12 digits.',
+            'lrn.regex' => 'LRN must contain only numbers.',
+            'parent_name.min' => 'Parent name must be at least 2 characters.',
+            'parent_name.max' => 'Parent name must not exceed 100 characters.',
+            'parent_phone.size' => 'Phone number must be exactly 11 digits.',
+            'parent_phone.regex' => 'Phone number must be a valid Philippine mobile number (e.g., 09171234567).',
         ]);
 
         // Generate unique student_id (Requirement 8.1)
@@ -100,6 +122,7 @@ class StudentController extends Controller
         $validated['is_active'] = $validated['is_active'] ?? true;
         $validated['sms_enabled'] = $validated['sms_enabled'] ?? false;
 
+        // school_id is auto-assigned by BelongsToSchool trait
         $student = Student::create($validated);
 
         // Enroll in classes if provided (Requirement 8.4)
@@ -130,7 +153,7 @@ class StudentController extends Controller
 
         // Check access for teachers (Requirement 8.2)
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentClassIds = $student->classes()->pluck('classes.id');
             
             if ($teacherClassIds->intersect($studentClassIds)->isEmpty()) {
@@ -156,7 +179,7 @@ class StudentController extends Controller
 
         // Check access for teachers (Requirement 8.2)
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentClassIds = $student->classes()->pluck('classes.id');
             
             if ($teacherClassIds->intersect($studentClassIds)->isEmpty()) {
@@ -182,24 +205,44 @@ class StudentController extends Controller
 
         // Check access for teachers (Requirement 8.2)
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentClassIds = $student->classes()->pluck('classes.id');
-            
+
             if ($teacherClassIds->intersect($studentClassIds)->isEmpty()) {
                 abort(403, 'You do not have access to this student.');
             }
         }
 
+        // LRN should be unique per school
         $validated = $request->validate([
-            'first_name' => ['required', 'string', 'max:255'],
-            'last_name' => ['required', 'string', 'max:255'],
-            'lrn' => ['nullable', 'string', 'max:12', Rule::unique('students')->ignore($student->id)],
-            'parent_name' => ['nullable', 'string', 'max:255'],
-            'parent_phone' => ['nullable', 'string', 'max:20'],
+            'first_name' => ['required', 'string', 'min:2', 'max:50'],
+            'last_name' => ['required', 'string', 'min:2', 'max:50'],
+            'lrn' => [
+                'required',
+                'string',
+                'size:12',
+                'regex:/^[0-9]+$/',
+                Rule::unique('students')->where(function ($query) use ($user) {
+                    return $query->where('school_id', $user->school_id);
+                })->ignore($student->id),
+            ],
+            'parent_name' => ['nullable', 'string', 'min:2', 'max:100'],
+            'parent_phone' => ['nullable', 'string', 'size:11', 'regex:/^09[0-9]{9}$/'],
             'parent_email' => ['nullable', 'email', 'max:255'],
             'address' => ['nullable', 'string', 'max:500'],
             'is_active' => ['boolean'],
             'sms_enabled' => ['boolean'],
+        ], [
+            'first_name.min' => 'First name must be at least 2 characters.',
+            'first_name.max' => 'First name must not exceed 50 characters.',
+            'last_name.min' => 'Last name must be at least 2 characters.',
+            'last_name.max' => 'Last name must not exceed 50 characters.',
+            'lrn.size' => 'LRN must be exactly 12 digits.',
+            'lrn.regex' => 'LRN must contain only numbers.',
+            'parent_name.min' => 'Parent name must be at least 2 characters.',
+            'parent_name.max' => 'Parent name must not exceed 100 characters.',
+            'parent_phone.size' => 'Phone number must be exactly 11 digits.',
+            'parent_phone.regex' => 'Phone number must be a valid Philippine mobile number (e.g., 09171234567).',
         ]);
 
         $validated['is_active'] = $validated['is_active'] ?? false;

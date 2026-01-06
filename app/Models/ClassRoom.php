@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -9,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class ClassRoom extends Model
 {
-    use HasFactory;
+    use HasFactory, BelongsToSchool;
 
     /**
      * The table associated with the model.
@@ -24,6 +25,7 @@ class ClassRoom extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'school_id',
         'grade_level',
         'section',
         'teacher_id',

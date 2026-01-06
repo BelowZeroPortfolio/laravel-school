@@ -12,7 +12,8 @@ class CheckRole
      * Handle an incoming request.
      *
      * Check if the authenticated user has the required role(s).
-     * - Admin bypasses all role checks (Requirement 2.1)
+     * - Super Admin bypasses all role checks (cross-school access)
+     * - Admin bypasses all role checks within their school (Requirement 2.1)
      * - Principal inherits teacher access (Requirement 2.2)
      * - Teacher denied admin routes (Requirement 2.3)
      *
@@ -28,7 +29,12 @@ class CheckRole
             return redirect()->route('login');
         }
 
-        // Admin bypasses all role checks (Requirement 2.1)
+        // Super Admin bypasses all role checks (cross-school access)
+        if ($user->isSuperAdmin()) {
+            return $next($request);
+        }
+
+        // Admin bypasses all role checks within their school (Requirement 2.1)
         if ($user->isAdmin()) {
             return $next($request);
         }

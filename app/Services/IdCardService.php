@@ -17,7 +17,7 @@ class IdCardService
      * The QR code contains the student's LRN if present, otherwise the student_id.
      * (Requirements: 16.1, 16.4)
      *
-     * @param Student $student
+     * @param  Student  $student
      * @return string The path to the generated QR code
      */
     public function generateQRCode(Student $student): string
@@ -25,15 +25,15 @@ class IdCardService
         // Use LRN if present, otherwise use student_id (Requirement 16.1)
         $identifier = $student->lrn ?? $student->student_id;
 
-        // Generate QR code as PNG
-        $qrCode = QrCode::format('png')
+        // Generate QR code as SVG (doesn't require Imagick extension)
+        $qrCode = QrCode::format('svg')
             ->size(200)
             ->margin(1)
             ->generate($identifier);
 
         // Create the storage path
-        $filename = 'qrcodes/' . $student->student_id . '_' . time() . '.png';
-        
+        $filename = 'qrcodes/'.$student->student_id.'_'.time().'.svg';
+
         // Store the QR code in public storage
         Storage::disk('public')->put($filename, $qrCode);
 

@@ -10,7 +10,7 @@
         <!-- Page Title -->
         <div class="flex-1 lg:flex-none">
             <h1 class="text-lg font-semibold text-gray-900 dark:text-white">
-                @yield('page-title', 'Dashboard')
+                @yield('title', 'Dashboard')
             </h1>
         </div>
 

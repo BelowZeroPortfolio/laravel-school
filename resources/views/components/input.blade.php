@@ -4,7 +4,8 @@
     'label' => null,
     'error' => null,
     'hint' => null,
-    'required' => false
+    'required' => false,
+    'validate' => true
 ])
 
 @php
@@ -17,7 +18,7 @@
             : 'border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:border-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-700');
 @endphp
 
-<div {{ $attributes->only('class')->merge(['class' => '']) }}>
+<div data-input-wrapper {{ $attributes->only('class')->merge(['class' => '']) }}>
     @if($label)
         <label for="{{ $name }}" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             {{ $label }}
@@ -30,13 +31,14 @@
     <input type="{{ $type }}"
            @if($name) name="{{ $name }}" id="{{ $name }}" @endif
            {{ $attributes->except('class')->merge(['class' => $inputClasses]) }}
-           @if($required) required @endif>
+           @if($required) required @endif
+           @if($validate) data-validate @endif>
     
     @if($hint && !$hasError)
-        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ $hint }}</p>
+        <p class="hint-text mt-1 text-xs text-gray-500 dark:text-gray-400">{{ $hint }}</p>
     @endif
     
     @if($hasError)
-        <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $errorMessage }}</p>
+        <p class="validation-message mt-1 text-xs text-red-600 dark:text-red-400">{{ $errorMessage }}</p>
     @endif
 </div>

@@ -69,7 +69,7 @@ class ReportController extends Controller
 
         // Students - role-based
         if ($user->isTeacher()) {
-            $classIds = $user->classes()->pluck('id');
+            $classIds = $user->getTeacherClassIds();
             $students = Student::whereHas('classes', function ($q) use ($classIds) {
                 $q->whereIn('classes.id', $classIds);
             })->active()->orderBy('last_name')->get();

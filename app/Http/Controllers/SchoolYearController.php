@@ -42,8 +42,18 @@ class SchoolYearController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        $user = $request->user();
+
+        // Name should be unique per school
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255', 'unique:school_years,name'],
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('school_years')->where(function ($query) use ($user) {
+                    return $query->where('school_id', $user->school_id);
+                }),
+            ],
             'start_date' => ['required', 'date'],
             'end_date' => ['required', 'date', 'after:start_date'],
             'is_active' => ['boolean'],
@@ -52,11 +62,12 @@ class SchoolYearController extends Controller
         $validated['is_active'] = $validated['is_active'] ?? false;
         $validated['is_locked'] = false;
 
-        // If setting as active, deactivate all others (Requirement 10.1)
+        // If setting as active, deactivate all others in same school (Requirement 10.1)
         if ($validated['is_active']) {
             SchoolYear::where('is_active', true)->update(['is_active' => false]);
         }
 
+        // school_id is auto-assigned by BelongsToSchool trait
         $schoolYear = SchoolYear::create($validated);
 
         return redirect()->route('school-years.show', $schoolYear)
@@ -70,7 +81,7 @@ class SchoolYearController extends Controller
     {
         $schoolYear->loadCount(['classes', 'attendances', 'teacherAttendances']);
         $schoolYear->load(['classes' => function ($q) {
-            $q->with('teacher')->orderBy('grade_level')->orderBy('section');
+            $q->with('teacher')->withCount('students')->orderBy('grade_level')->orderBy('section');
         }]);
 
         return view('school-years.show', [
@@ -94,6 +105,8 @@ class SchoolYearController extends Controller
      */
     public function update(Request $request, SchoolYear $schoolYear): RedirectResponse
     {
+        $user = $request->user();
+
         // Check if locked (Requirement 10.2)
         if ($schoolYear->is_locked) {
             return back()->withErrors([
@@ -101,8 +114,16 @@ class SchoolYearController extends Controller
             ]);
         }
 
+        // Name should be unique per school
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255', Rule::unique('school_years')->ignore($schoolYear->id)],
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('school_years')->where(function ($query) use ($user) {
+                    return $query->where('school_id', $user->school_id);
+                })->ignore($schoolYear->id),
+            ],
             'start_date' => ['required', 'date'],
             'end_date' => ['required', 'date', 'after:start_date'],
         ]);
@@ -124,6 +145,9 @@ class SchoolYearController extends Controller
 
         // Activate this school year
         $schoolYear->update(['is_active' => true]);
+
+        // Clear cache for scan performance
+        \Illuminate\Support\Facades\Cache::forget('active_school_year');
 
         return redirect()->route('school-years.index')
             ->with('success', 'School year activated successfully.');

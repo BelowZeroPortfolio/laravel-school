@@ -21,7 +21,7 @@ class ClassController extends Controller
     public function index(Request $request): View
     {
         $user = $request->user();
-        $query = ClassRoom::query()->with(['teacher', 'schoolYear']);
+        $query = ClassRoom::query()->with(['teacher', 'schoolYear'])->withCount('students');
 
         // Role-based filtering (Requirement 9.3)
         if ($user->isTeacher()) {
@@ -56,9 +56,18 @@ class ClassController extends Controller
     /**
      * Show the form for creating a new class.
      */
-    public function create(): View
+    public function create(Request $request): View
     {
-        $teachers = User::teachers()->active()->orderBy('full_name')->get();
+        $user = $request->user();
+
+        // Only show teachers from the same school
+        $teachers = User::teachers()
+            ->active()
+            ->where('school_id', $user->school_id)
+            ->orderBy('full_name')
+            ->get();
+
+        // SchoolYear is already scoped by BelongsToSchool trait
         $schoolYears = SchoolYear::orderBy('start_date', 'desc')->get();
 
         return view('classes.create', [
@@ -73,6 +82,8 @@ class ClassController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        $user = $request->user();
+
         $validated = $request->validate([
             'grade_level' => ['required', 'string', 'max:50'],
             'section' => ['required', 'string', 'max:50'],
@@ -82,15 +93,22 @@ class ClassController extends Controller
             'is_active' => ['boolean'],
         ]);
 
-        // Validate teacher role (Requirement 9.2)
+        // Validate teacher role and same school (Requirement 9.2)
         $teacher = User::find($validated['teacher_id']);
         if (!$teacher || !$teacher->isTeacher()) {
             return back()->withErrors(['teacher_id' => 'The selected user must be a teacher.'])
                 ->withInput();
         }
 
-        // Check uniqueness constraint (Requirement 9.1)
-        $exists = ClassRoom::where('grade_level', $validated['grade_level'])
+        // Ensure teacher belongs to same school
+        if ($teacher->school_id !== $user->school_id) {
+            return back()->withErrors(['teacher_id' => 'The selected teacher must belong to your school.'])
+                ->withInput();
+        }
+
+        // Check uniqueness constraint within school (Requirement 9.1)
+        $exists = ClassRoom::where('school_id', $user->school_id)
+            ->where('grade_level', $validated['grade_level'])
             ->where('section', $validated['section'])
             ->where('school_year_id', $validated['school_year_id'])
             ->exists();
@@ -102,6 +120,7 @@ class ClassController extends Controller
         }
 
         $validated['is_active'] = $validated['is_active'] ?? true;
+        // school_id is auto-assigned by BelongsToSchool trait
 
         $class = ClassRoom::create($validated);
 
@@ -122,6 +141,7 @@ class ClassController extends Controller
         }
 
         $class->load(['teacher', 'schoolYear', 'students']);
+        $class->loadCount('students');
 
         return view('classes.show', [
             'class' => $class,
@@ -136,11 +156,18 @@ class ClassController extends Controller
         $user = $request->user();
 
         // Only admins can edit classes
-        if (!$user->isAdmin()) {
+        if (!$user->isAdmin() && !$user->isSuperAdmin()) {
             abort(403, 'Only administrators can edit classes.');
         }
 
-        $teachers = User::teachers()->active()->orderBy('full_name')->get();
+        // Only show teachers from the same school
+        $teachers = User::teachers()
+            ->active()
+            ->where('school_id', $user->school_id)
+            ->orderBy('full_name')
+            ->get();
+
+        // SchoolYear is already scoped by BelongsToSchool trait
         $schoolYears = SchoolYear::orderBy('start_date', 'desc')->get();
 
         return view('classes.edit', [
@@ -159,7 +186,7 @@ class ClassController extends Controller
         $user = $request->user();
 
         // Only admins can update classes
-        if (!$user->isAdmin()) {
+        if (!$user->isAdmin() && !$user->isSuperAdmin()) {
             abort(403, 'Only administrators can update classes.');
         }
 
@@ -172,15 +199,22 @@ class ClassController extends Controller
             'is_active' => ['boolean'],
         ]);
 
-        // Validate teacher role (Requirement 9.2)
+        // Validate teacher role and same school (Requirement 9.2)
         $teacher = User::find($validated['teacher_id']);
         if (!$teacher || !$teacher->isTeacher()) {
             return back()->withErrors(['teacher_id' => 'The selected user must be a teacher.'])
                 ->withInput();
         }
 
-        // Check uniqueness constraint excluding current class (Requirement 9.1)
-        $exists = ClassRoom::where('grade_level', $validated['grade_level'])
+        // Ensure teacher belongs to same school
+        if ($teacher->school_id !== $user->school_id) {
+            return back()->withErrors(['teacher_id' => 'The selected teacher must belong to your school.'])
+                ->withInput();
+        }
+
+        // Check uniqueness constraint excluding current class within school (Requirement 9.1)
+        $exists = ClassRoom::where('school_id', $user->school_id)
+            ->where('grade_level', $validated['grade_level'])
             ->where('section', $validated['section'])
             ->where('school_year_id', $validated['school_year_id'])
             ->where('id', '!=', $class->id)

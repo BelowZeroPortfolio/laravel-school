@@ -11,10 +11,16 @@ use App\Models\TeacherAttendance;
 use App\Models\TimeSchedule;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class StudentAttendanceService
 {
     protected TeacherAttendanceService $teacherAttendanceService;
+
+    /**
+     * Cache TTL for active school year and schedule (5 minutes)
+     */
+    protected const CACHE_TTL = 300;
 
     public function __construct(TeacherAttendanceService $teacherAttendanceService)
     {
@@ -22,11 +28,33 @@ class StudentAttendanceService
     }
 
     /**
+     * Get active school year with caching.
+     * Reduces repeated queries during high-volume scanning.
+     */
+    protected function getActiveSchoolYear(): ?SchoolYear
+    {
+        return Cache::remember('active_school_year', self::CACHE_TTL, function () {
+            return SchoolYear::active()->first();
+        });
+    }
+
+    /**
+     * Get active time schedule with caching.
+     * Reduces repeated queries during high-volume scanning.
+     */
+    protected function getActiveTimeSchedule(): ?TimeSchedule
+    {
+        return Cache::remember('active_time_schedule', self::CACHE_TTL, function () {
+            return TimeSchedule::active()->first();
+        });
+    }
+
+    /**
      * Find a student by QR code value.
      * Searches by LRN first, then by student_id.
      * (Requirement 6.2)
      *
-     * @param string $qrCode The QR code value (LRN or student_id)
+     * @param  string  $qrCode  The QR code value (LRN or student_id)
      * @return Student|null The found student or null
      */
     public function findStudentByQRCode(string $qrCode): ?Student
@@ -62,15 +90,15 @@ class StudentAttendanceService
      * Creates attendance record, auto-calculates late status, triggers teacher Phase 2.
      * (Requirements 6.1, 6.4, 6.5)
      *
-     * @param int $studentId The student's ID
-     * @param string|null $status Optional status override
+     * @param  int  $studentId  The student's ID
+     * @param  string|null  $status  Optional status override
      * @return array|false Array with attendance data or false on failure
      */
     public function recordAttendance(int $studentId, ?string $status = null): array|false
     {
-        // Get active school year (Requirement 10.3)
-        $activeSchoolYear = SchoolYear::active()->first();
-        if (!$activeSchoolYear) {
+        // Get active school year with caching (Requirement 10.3)
+        $activeSchoolYear = $this->getActiveSchoolYear();
+        if (! $activeSchoolYear) {
             return false;
         }
 
@@ -183,14 +211,15 @@ class StudentAttendanceService
      * Compares against active schedule cutoff.
      * (Requirement 6.4)
      *
-     * @param string $checkTime The check-in time (H:i:s format)
+     * @param  string  $checkTime  The check-in time (H:i:s format)
      * @return array Array with 'status' and 'is_late' keys
      */
     public function calculateLateStatus(string $checkTime): array
     {
-        $activeSchedule = TimeSchedule::active()->first();
+        // Use cached active schedule
+        $activeSchedule = $this->getActiveTimeSchedule();
 
-        if (!$activeSchedule) {
+        if (! $activeSchedule) {
             // Default to present if no active schedule
             return [
                 'status' => 'present',

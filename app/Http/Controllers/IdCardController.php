@@ -26,25 +26,61 @@ class IdCardController extends Controller
         $user = $request->user();
 
         // Get classes based on user role
-        $classes = $user->isTeacher()
-            ? $user->classes()->active()->with('schoolYear')->get()
-            : ClassRoom::active()->with('schoolYear')->get();
+        $classesQuery = $user->isTeacher()
+            ? $user->classes()->active()->with('schoolYear')
+            : ClassRoom::active()->with('schoolYear');
 
-        // Get students based on user role
+        $classes = $classesQuery->get();
+
+        // Get unique grade levels and sections for filters
+        $gradeLevels = $classes->pluck('grade_level')->unique()->sort()->values();
+        $sections = $classes->pluck('section')->unique()->sort()->values();
+
+        // Get students based on user role and filters
         $studentsQuery = Student::active()->with(['classes' => function ($query) {
-            $query->wherePivot('is_active', true);
+            $query->wherePivot('is_active', true)->with('schoolYear');
         }]);
 
         if ($user->isTeacher()) {
             $teacherClassIds = $user->classes()->pluck('id');
-            $studentsQuery->whereHas('classes', fn($q) => $q->whereIn('classes.id', $teacherClassIds));
+            $studentsQuery->whereHas('classes', fn ($q) => $q->whereIn('classes.id', $teacherClassIds));
         }
 
-        $students = $studentsQuery->orderBy('last_name')->orderBy('first_name')->get();
+        // Apply filters
+        if ($request->filled('grade_level')) {
+            $studentsQuery->whereHas('classes', fn ($q) => $q->where('grade_level', $request->input('grade_level'))
+                ->where('student_classes.is_active', true));
+        }
+
+        if ($request->filled('section')) {
+            $studentsQuery->whereHas('classes', fn ($q) => $q->where('section', $request->input('section'))
+                ->where('student_classes.is_active', true));
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->input('search');
+            $studentsQuery->where(function ($q) use ($search) {
+                $q->where('first_name', 'like', "%{$search}%")
+                    ->orWhere('last_name', 'like', "%{$search}%")
+                    ->orWhere('lrn', 'like', "%{$search}%")
+                    ->orWhere('student_id', 'like', "%{$search}%");
+            });
+        }
+
+        // Only show students if filters are applied
+        $students = ($request->hasAny(['grade_level', 'section', 'search']))
+            ? $studentsQuery->orderBy('last_name')->orderBy('first_name')->get()
+            : collect();
+
+        // Get active school year
+        $activeSchoolYear = \App\Models\SchoolYear::active()->first();
 
         return view('id-cards.index', [
             'classes' => $classes,
             'students' => $students,
+            'gradeLevels' => $gradeLevels,
+            'sections' => $sections,
+            'activeSchoolYear' => $activeSchoolYear,
         ]);
     }
 

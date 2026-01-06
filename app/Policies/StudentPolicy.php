@@ -87,11 +87,16 @@ class StudentPolicy
 
     /**
      * Check if a student belongs to any of the teacher's classes.
+     * Uses cached class IDs to prevent N+1 queries.
      */
     private function studentBelongsToTeacher(User $teacher, Student $student): bool
     {
-        $teacherClassIds = $teacher->classes()->pluck('id');
+        $teacherClassIds = $teacher->getTeacherClassIds();
         
+        if ($teacherClassIds->isEmpty()) {
+            return false;
+        }
+
         return $student->classes()
             ->whereIn('classes.id', $teacherClassIds)
             ->exists();

@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\School;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -24,6 +25,7 @@ class UserFactory extends Factory
     public function definition(): array
     {
         return [
+            'school_id' => School::factory(),
             'username' => fake()->unique()->userName(),
             'password' => static::$password ??= Hash::make('password'),
             'role' => 'teacher',
@@ -35,6 +37,17 @@ class UserFactory extends Factory
             'last_login' => null,
             'remember_token' => Str::random(10),
         ];
+    }
+
+    /**
+     * Indicate that the user is a super admin (no school).
+     */
+    public function superAdmin(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => null,
+            'role' => 'super_admin',
+        ]);
     }
 
     /**
@@ -74,6 +87,16 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'is_active' => false,
+        ]);
+    }
+
+    /**
+     * Assign user to a specific school.
+     */
+    public function forSchool(School $school): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => $school->id,
         ]);
     }
 }

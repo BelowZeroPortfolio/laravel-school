@@ -8,6 +8,7 @@ use App\Models\SchoolYear;
 use App\Models\Student;
 use App\Models\TeacherAttendance;
 use App\Models\User;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
@@ -17,9 +18,15 @@ class DashboardController extends Controller
      * Display the role-appropriate dashboard.
      * (Requirement 1.1)
      */
-    public function index(Request $request): View
+    public function index(Request $request): View|RedirectResponse
     {
         $user = $request->user();
+
+        // Redirect super admin to their dedicated dashboard
+        if ($user->isSuperAdmin()) {
+            return redirect()->route('super-admin.dashboard');
+        }
+
         $activeSchoolYear = SchoolYear::active()->first();
 
         $data = [
@@ -41,16 +48,24 @@ class DashboardController extends Controller
 
     /**
      * Get admin-specific dashboard data.
+     * Data is auto-scoped by BelongsToSchool trait on models.
      */
     protected function getAdminDashboardData(?SchoolYear $schoolYear): array
     {
+        $user = auth()->user();
         $schoolYearId = $schoolYear?->id;
 
+        // User model doesn't use BelongsToSchool trait, so scope manually
+        $teacherCount = User::teachers()
+            ->active()
+            ->where('school_id', $user->school_id)
+            ->count();
+
         return [
-            'totalStudents' => Student::active()->count(),
-            'totalTeachers' => User::teachers()->active()->count(),
-            'totalClasses' => $schoolYearId 
-                ? ClassRoom::where('school_year_id', $schoolYearId)->active()->count() 
+            'totalStudents' => Student::active()->count(), // Auto-scoped by trait
+            'totalTeachers' => $teacherCount,
+            'totalClasses' => $schoolYearId
+                ? ClassRoom::where('school_year_id', $schoolYearId)->active()->count() // Auto-scoped
                 : 0,
             'todayAttendance' => Attendance::today()->count(),
             'todayTeacherAttendance' => TeacherAttendance::today()->count(),
@@ -64,10 +79,16 @@ class DashboardController extends Controller
      */
     protected function getPrincipalDashboardData(?SchoolYear $schoolYear): array
     {
-        $schoolYearId = $schoolYear?->id;
+        $user = auth()->user();
+
+        // User model doesn't use BelongsToSchool trait, so scope manually
+        $teacherCount = User::teachers()
+            ->active()
+            ->where('school_id', $user->school_id)
+            ->count();
 
         return [
-            'totalTeachers' => User::teachers()->active()->count(),
+            'totalTeachers' => $teacherCount,
             'todayTeacherAttendance' => TeacherAttendance::today()->count(),
             'pendingTeachers' => TeacherAttendance::today()->pending()->count(),
             'lateTeachers' => TeacherAttendance::today()->late()->count(),
@@ -85,11 +106,11 @@ class DashboardController extends Controller
     {
         $schoolYearId = $schoolYear?->id;
 
-        // Get teacher's classes
+        // Get teacher's classes with student count (avoid N+1)
         $classes = $user->classes()
             ->when($schoolYearId, fn($q) => $q->where('school_year_id', $schoolYearId))
             ->active()
-            ->with('students')
+            ->withCount('students')
             ->get();
 
         // Get today's attendance for teacher's students
@@ -105,7 +126,7 @@ class DashboardController extends Controller
 
         return [
             'classes' => $classes,
-            'totalStudents' => $classes->sum(fn($c) => $c->students->count()),
+            'totalStudents' => $classes->sum('students_count'),
             'todayAttendance' => $todayAttendance,
             'teacherAttendance' => $teacherAttendance,
         ];

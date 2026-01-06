@@ -56,7 +56,7 @@ class AttendanceController extends Controller
         // Role-based filtering (Requirement 18.3)
         if ($user->isTeacher()) {
             // Teachers see only attendance for students in their classes
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $query->whereHas('student.classes', fn($q) => $q->whereIn('classes.id', $teacherClassIds));
         }
 
@@ -80,7 +80,9 @@ class AttendanceController extends Controller
             });
         }
 
-        $attendances = $query->orderBy('check_in_time', 'desc')->paginate(50);
+        $attendances = $query->with(['student.classes'])
+            ->orderBy('check_in_time', 'desc')
+            ->paginate(50);
 
         // Get classes for filter dropdown (role-based)
         $classes = $user->isTeacher()
@@ -95,7 +97,7 @@ class AttendanceController extends Controller
         
         // Apply role-based filtering to stats as well
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $statsQuery->whereHas('student.classes', fn($q) => $q->whereIn('classes.id', $teacherClassIds));
         }
 
@@ -155,7 +157,7 @@ class AttendanceController extends Controller
 
         // Role-based filtering
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $query->whereHas('student.classes', fn($q) => $q->whereIn('classes.id', $teacherClassIds));
         }
 
@@ -293,7 +295,7 @@ class AttendanceController extends Controller
         // Verify teacher can only mark attendance for their students
         if ($user->isTeacher()) {
             $student = Student::find($validated['student_id']);
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentInTeacherClass = $student->classes()
                 ->whereIn('classes.id', $teacherClassIds)
                 ->exists();
@@ -347,7 +349,7 @@ class AttendanceController extends Controller
 
         // Verify teacher can only update attendance for their students
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentInTeacherClass = $attendance->student->classes()
                 ->whereIn('classes.id', $teacherClassIds)
                 ->exists();
@@ -398,7 +400,7 @@ class AttendanceController extends Controller
 
         // Verify teacher can only view history for their students
         if ($user->isTeacher()) {
-            $teacherClassIds = $user->classes()->pluck('id');
+            $teacherClassIds = $user->getTeacherClassIds();
             $studentInTeacherClass = $student->classes()
                 ->whereIn('classes.id', $teacherClassIds)
                 ->exists();

@@ -95,13 +95,54 @@
                     </a>
                     <div class="flex items-center space-x-2">
                         @if(!$schoolYear->is_active && !$schoolYear->is_locked)
-                        <form method="POST" action="{{ route('school-years.activate', $schoolYear) }}" class="inline">
-                            @csrf
-                            @method('PATCH')
-                            <button type="submit" class="text-sm text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300">
+                        <div x-data="{ showModal: false, confirmText: '' }">
+                            <button type="button" @click="showModal = true; confirmText = ''" class="text-sm text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300">
                                 Activate
                             </button>
-                        </form>
+                            
+                            <!-- Confirmation Modal -->
+                            <div x-show="showModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto" aria-modal="true">
+                                <div class="flex items-center justify-center min-h-screen px-4">
+                                    <div class="fixed inset-0 bg-black/50" @click="showModal = false"></div>
+                                    <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+                                        <div class="flex items-start mb-4">
+                                            <div class="flex-shrink-0 w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/50 flex items-center justify-center">
+                                                <svg class="w-6 h-6 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                                </svg>
+                                            </div>
+                                            <div class="ml-4">
+                                                <h3 class="text-lg font-medium text-gray-900 dark:text-white">Activate School Year</h3>
+                                                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                                    You are about to activate <span class="font-semibold">{{ $schoolYear->name }}</span>. This will deactivate any currently active school year.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div class="mb-4">
+                                            <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                                                Type <span class="font-mono font-bold text-red-600 dark:text-red-400">PROCEED</span> to confirm:
+                                            </p>
+                                            <input type="text" x-model="confirmText" 
+                                                   class="w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                                                   placeholder="Type PROCEED">
+                                            <p x-show="confirmText.length > 0 && confirmText !== 'PROCEED'" class="mt-1 text-xs text-red-600 dark:text-red-400">
+                                                Please type PROCEED exactly.
+                                            </p>
+                                        </div>
+                                        <div class="flex justify-end gap-3">
+                                            <x-button type="button" variant="outline" @click="showModal = false">Cancel</x-button>
+                                            <form method="POST" action="{{ route('school-years.activate', $schoolYear) }}">
+                                                @csrf
+                                                <x-button type="submit" variant="success" x-bind:disabled="confirmText !== 'PROCEED'" 
+                                                          x-bind:class="confirmText !== 'PROCEED' ? 'opacity-50 cursor-not-allowed' : ''">
+                                                    Activate
+                                                </x-button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         @endif
                         @if(!$schoolYear->is_locked)
                         <a href="{{ route('school-years.edit', $schoolYear) }}" class="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">

@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Models\ClassRoom;
+use App\Models\School;
 use App\Models\SchoolYear;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -31,6 +32,7 @@ class ClassRoomFactory extends Factory
         $sections = ['A', 'B', 'C', 'D', 'E', 'F'];
 
         return [
+            'school_id' => School::factory(),
             'grade_level' => fake()->randomElement($gradeLevels),
             'section' => fake()->randomElement($sections),
             'teacher_id' => User::factory()->teacher(),
@@ -77,6 +79,16 @@ class ClassRoomFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'max_capacity' => $capacity,
+        ]);
+    }
+
+    /**
+     * Assign class to a specific school.
+     */
+    public function forSchool(School $school): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => $school->id,
         ]);
     }
 }

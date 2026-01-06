@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\School;
 use App\Models\Student;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -25,6 +26,7 @@ class StudentFactory extends Factory
     public function definition(): array
     {
         return [
+            'school_id' => School::factory(),
             'student_id' => fake()->unique()->numerify('STU-######'),
             'lrn' => fake()->unique()->numerify('############'),
             'first_name' => fake()->firstName(),
@@ -67,6 +69,16 @@ class StudentFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'lrn' => $lrn,
+        ]);
+    }
+
+    /**
+     * Assign student to a specific school.
+     */
+    public function forSchool(School $school): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => $school->id,
         ]);
     }
 }

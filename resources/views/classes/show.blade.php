@@ -60,7 +60,7 @@
                     <div>
                         <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Capacity</dt>
                         <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                            {{ $class->students->count() }} / {{ $class->max_capacity }} students
+                            {{ $class->students_count }} / {{ $class->max_capacity }} students
                         </dd>
                     </div>
                 </dl>
@@ -69,7 +69,7 @@
             <!-- Enrolled Students -->
             <x-card title="Enrolled Students" :padding="false">
                 <x-slot name="actions">
-                    @if(auth()->user()->isAdmin() && $class->students->count() < $class->max_capacity)
+                    @if(auth()->user()->isAdmin() && $class->students_count < $class->max_capacity)
                     <x-button variant="outline" size="sm" @click="$dispatch('open-modal', 'enroll-student')">
                         <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -79,7 +79,7 @@
                     @endif
                 </x-slot>
 
-                @if($class->students->count() > 0)
+                @if($class->students_count > 0)
                     <x-table>
                         <x-slot name="head">
                             <tr>
@@ -150,7 +150,7 @@
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-500 dark:text-gray-400">Total Students</span>
-                        <span class="text-lg font-semibold text-gray-900 dark:text-white">{{ $class->students->count() }}</span>
+                        <span class="text-lg font-semibold text-gray-900 dark:text-white">{{ $class->students_count }}</span>
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-500 dark:text-gray-400">Capacity</span>
@@ -158,14 +158,14 @@
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-gray-500 dark:text-gray-400">Available Slots</span>
-                        <span class="text-lg font-semibold text-gray-900 dark:text-white">{{ $class->max_capacity - $class->students->count() }}</span>
+                        <span class="text-lg font-semibold text-gray-900 dark:text-white">{{ $class->max_capacity - $class->students_count }}</span>
                     </div>
                     <div class="pt-2 border-t border-gray-200 dark:border-gray-700">
                         <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                            <div class="bg-indigo-600 h-2 rounded-full" style="width: {{ ($class->students->count() / $class->max_capacity) * 100 }}%"></div>
+                            <div class="bg-indigo-600 h-2 rounded-full" style="width: {{ ($class->students_count / $class->max_capacity) * 100 }}%"></div>
                         </div>
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 text-center">
-                            {{ round(($class->students->count() / $class->max_capacity) * 100) }}% filled
+                            {{ round(($class->students_count / $class->max_capacity) * 100) }}% filled
                         </p>
                     </div>
                 </div>

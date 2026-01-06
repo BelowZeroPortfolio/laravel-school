@@ -14,11 +14,21 @@ class UserController extends Controller
 {
     /**
      * Display a listing of users.
+     * Scoped to current user's school.
      * (Requirement 2.1)
      */
     public function index(Request $request): View
     {
+        $currentUser = $request->user();
         $query = User::query();
+
+        // Scope to current user's school (multi-tenancy)
+        if ($currentUser->school_id) {
+            $query->where('school_id', $currentUser->school_id);
+        }
+
+        // Exclude super_admin from list (only super_admin can manage super_admins)
+        $query->where('role', '!=', 'super_admin');
 
         // Apply filters
         if ($request->filled('search')) {
@@ -55,24 +65,36 @@ class UserController extends Controller
 
     /**
      * Store a newly created user.
+     * Automatically assigns to current user's school.
      * (Requirement 2.1)
      */
     public function store(Request $request): RedirectResponse
     {
+        $currentUser = $request->user();
+
         $validated = $request->validate([
-            'username' => ['required', 'string', 'max:255', 'unique:users,username'],
+            'username' => ['required', 'string', 'min:3', 'max:50', 'regex:/^[a-zA-Z0-9_]+$/', 'unique:users,username'],
             'password' => ['required', 'confirmed', Password::defaults()],
             'role' => ['required', 'in:admin,principal,teacher'],
-            'full_name' => ['required', 'string', 'max:255'],
+            'full_name' => ['required', 'string', 'min:2', 'max:100'],
             'email' => ['nullable', 'email', 'max:255', 'unique:users,email'],
             'is_active' => ['boolean'],
             'is_premium' => ['boolean'],
             'premium_expires_at' => ['nullable', 'date'],
+        ], [
+            'username.min' => 'Username must be at least 3 characters.',
+            'username.max' => 'Username must not exceed 50 characters.',
+            'username.regex' => 'Username can only contain letters, numbers, and underscores.',
+            'full_name.min' => 'Full name must be at least 2 characters.',
+            'full_name.max' => 'Full name must not exceed 100 characters.',
         ]);
 
         $validated['password'] = Hash::make($validated['password']);
         $validated['is_active'] = $validated['is_active'] ?? true;
         $validated['is_premium'] = $validated['is_premium'] ?? false;
+
+        // Assign to current user's school (multi-tenancy)
+        $validated['school_id'] = $currentUser->school_id;
 
         $user = User::create($validated);
 
@@ -83,11 +105,20 @@ class UserController extends Controller
     /**
      * Display the specified user.
      */
-    public function show(User $user): View
+    public function show(Request $request, User $user): View
     {
-        $user->load(['classes', 'teacherAttendances' => function ($q) {
-            $q->orderBy('attendance_date', 'desc')->limit(10);
-        }]);
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
+        $user->loadCount(['classes', 'teacherAttendances']);
+        $user->load([
+            'classes' => function ($q) {
+                $q->with('schoolYear')->withCount('students');
+            },
+            'teacherAttendances' => function ($q) {
+                $q->orderBy('attendance_date', 'desc')->limit(10);
+            }
+        ]);
 
         return view('users.show', [
             'user' => $user,
@@ -97,8 +128,11 @@ class UserController extends Controller
     /**
      * Show the form for editing the specified user.
      */
-    public function edit(User $user): View
+    public function edit(Request $request, User $user): View
     {
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
         return view('users.edit', [
             'user' => $user,
         ]);
@@ -110,15 +144,24 @@ class UserController extends Controller
      */
     public function update(Request $request, User $user): RedirectResponse
     {
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
         $validated = $request->validate([
-            'username' => ['required', 'string', 'max:255', Rule::unique('users')->ignore($user->id)],
+            'username' => ['required', 'string', 'min:3', 'max:50', 'regex:/^[a-zA-Z0-9_]+$/', Rule::unique('users')->ignore($user->id)],
             'password' => ['nullable', 'confirmed', Password::defaults()],
             'role' => ['required', 'in:admin,principal,teacher'],
-            'full_name' => ['required', 'string', 'max:255'],
+            'full_name' => ['required', 'string', 'min:2', 'max:100'],
             'email' => ['nullable', 'email', 'max:255', Rule::unique('users')->ignore($user->id)],
             'is_active' => ['boolean'],
             'is_premium' => ['boolean'],
             'premium_expires_at' => ['nullable', 'date'],
+        ], [
+            'username.min' => 'Username must be at least 3 characters.',
+            'username.max' => 'Username must not exceed 50 characters.',
+            'username.regex' => 'Username can only contain letters, numbers, and underscores.',
+            'full_name.min' => 'Full name must be at least 2 characters.',
+            'full_name.max' => 'Full name must not exceed 100 characters.',
         ]);
 
         // Only update password if provided
@@ -140,8 +183,11 @@ class UserController extends Controller
     /**
      * Deactivate the specified user.
      */
-    public function destroy(User $user): RedirectResponse
+    public function destroy(Request $request, User $user): RedirectResponse
     {
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
         // Prevent self-deactivation
         if ($user->id === auth()->id()) {
             return back()->withErrors(['delete' => 'You cannot deactivate your own account.']);
@@ -157,8 +203,11 @@ class UserController extends Controller
     /**
      * Reactivate a deactivated user.
      */
-    public function reactivate(User $user): RedirectResponse
+    public function reactivate(Request $request, User $user): RedirectResponse
     {
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
         $user->update(['is_active' => true]);
 
         return redirect()->route('users.show', $user)
@@ -170,6 +219,9 @@ class UserController extends Controller
      */
     public function resetPassword(Request $request, User $user): RedirectResponse
     {
+        // Ensure user belongs to same school (multi-tenancy)
+        $this->authorizeSchoolAccess($request->user(), $user);
+
         $validated = $request->validate([
             'password' => ['required', 'confirmed', Password::defaults()],
         ]);
@@ -180,5 +232,26 @@ class UserController extends Controller
 
         return redirect()->route('users.show', $user)
             ->with('success', 'Password reset successfully.');
+    }
+
+    /**
+     * Authorize that the current user can access the target user (same school).
+     */
+    protected function authorizeSchoolAccess(User $currentUser, User $targetUser): void
+    {
+        // Super admin can access all
+        if ($currentUser->isSuperAdmin()) {
+            return;
+        }
+
+        // Users must belong to the same school
+        if ($currentUser->school_id !== $targetUser->school_id) {
+            abort(403, 'You do not have access to this user.');
+        }
+
+        // Cannot manage super_admin users
+        if ($targetUser->isSuperAdmin()) {
+            abort(403, 'You cannot manage super admin users.');
+        }
     }
 }

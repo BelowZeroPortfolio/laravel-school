@@ -16,7 +16,7 @@
         <p class="text-sm text-gray-500 dark:text-gray-400">{{ $user->full_name }}</p>
     </div>
 
-    <form method="POST" action="{{ route('users.update', $user) }}">
+    <form method="POST" action="{{ route('users.update', $user) }}" data-validate>
         @csrf
         @method('PUT')
 
@@ -30,6 +30,10 @@
                     :value="old('username', $user->username)"
                     required
                     placeholder="Enter username"
+                    minlength="3"
+                    maxlength="50"
+                    pattern="[a-zA-Z0-9_]+"
+                    title="Username can only contain letters, numbers, and underscores"
                 />
 
                 <x-input 
@@ -39,6 +43,8 @@
                     :value="old('full_name', $user->full_name)"
                     required
                     placeholder="Enter full name"
+                    minlength="2"
+                    maxlength="100"
                 />
 
                 <x-input 
@@ -47,6 +53,7 @@
                     label="Email Address"
                     :value="old('email', $user->email)"
                     placeholder="email@example.com"
+                    maxlength="255"
                 />
 
                 <x-select 

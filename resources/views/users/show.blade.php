@@ -90,7 +90,7 @@
             </x-card>
 
             <!-- Classes (for teachers) -->
-            @if($user->isTeacher() && $user->classes->count() > 0)
+            @if($user->isTeacher() && $user->classes_count > 0)
             <x-card title="Assigned Classes" :padding="false">
                 <x-table>
                     <x-slot name="head">
@@ -112,7 +112,7 @@
                                 {{ $class->schoolYear->name ?? '-' }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                {{ $class->students_count ?? $class->students->count() }} / {{ $class->max_capacity }}
+                                {{ $class->students_count }} / {{ $class->max_capacity }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <x-badge type="{{ $class->is_active ? 'success' : 'default' }}" size="sm">
@@ -126,7 +126,7 @@
             @endif
 
             <!-- Recent Attendance (for teachers) -->
-            @if($user->isTeacher() && $user->teacherAttendances->count() > 0)
+            @if($user->isTeacher() && $user->teacher_attendances_count > 0)
             <x-card title="Recent Attendance" :padding="false">
                 <x-table>
                     <x-slot name="head">

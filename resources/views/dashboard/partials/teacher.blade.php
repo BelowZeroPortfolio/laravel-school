@@ -120,7 +120,7 @@
                 </x-badge>
             </div>
             <p class="text-sm text-gray-500 dark:text-gray-400">
-                {{ $class->students->count() }} / {{ $class->max_capacity }} students
+                {{ $class->students_count }} / {{ $class->max_capacity }} students
             </p>
         </a>
         @endforeach

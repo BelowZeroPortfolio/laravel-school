@@ -26,16 +26,30 @@ class TeacherMonitoringController extends Controller
      */
     public function index(Request $request): View
     {
+        $currentUser = $request->user();
         $filters = $this->buildFilters($request);
-        
+
         // Get attendance records with filters (Requirement 11.2)
         $attendances = $this->teacherAttendanceService->getAttendanceRecords($filters);
+
+        // Filter by school (multi-tenancy)
+        if ($currentUser->school_id) {
+            $attendances = $attendances->filter(function ($attendance) use ($currentUser) {
+                return $attendance->teacher && $attendance->teacher->school_id === $currentUser->school_id;
+            });
+        }
 
         // Calculate statistics (Requirement 11.3)
         $stats = $this->calculateStatistics($attendances);
 
-        // Get filter options
-        $teachers = User::teachers()->active()->orderBy('full_name')->get();
+        // Get filter options - scoped by school
+        $teachers = User::teachers()
+            ->active()
+            ->when($currentUser->school_id, fn($q) => $q->where('school_id', $currentUser->school_id))
+            ->orderBy('full_name')
+            ->get();
+
+        // SchoolYear is auto-scoped by BelongsToSchool trait
         $schoolYears = SchoolYear::orderBy('start_date', 'desc')->get();
 
         return view('teacher-monitoring.index', [
@@ -44,7 +58,7 @@ class TeacherMonitoringController extends Controller
             'teachers' => $teachers,
             'schoolYears' => $schoolYears,
             'filters' => $filters,
-            'isReadOnly' => $request->user()->isPrincipal(), // Requirement 11.1
+            'isReadOnly' => $currentUser->isPrincipal(), // Requirement 11.1
         ]);
     }
 
@@ -54,8 +68,9 @@ class TeacherMonitoringController extends Controller
      */
     public function today(Request $request): View
     {
+        $currentUser = $request->user();
         $schoolYearId = $request->input('school_year_id');
-        
+
         if (!$schoolYearId) {
             $activeSchoolYear = SchoolYear::active()->first();
             $schoolYearId = $activeSchoolYear?->id;
@@ -64,10 +79,19 @@ class TeacherMonitoringController extends Controller
         $attendances = TeacherAttendance::with(['teacher', 'timeRule'])
             ->today()
             ->when($schoolYearId, fn($q) => $q->forSchoolYear($schoolYearId))
+            ->whereHas('teacher', function ($q) use ($currentUser) {
+                if ($currentUser->school_id) {
+                    $q->where('school_id', $currentUser->school_id);
+                }
+            })
             ->get();
 
-        // Get all active teachers to identify those without records
-        $allTeachers = User::teachers()->active()->get();
+        // Get all active teachers from same school to identify those without records
+        $allTeachers = User::teachers()
+            ->active()
+            ->when($currentUser->school_id, fn($q) => $q->where('school_id', $currentUser->school_id))
+            ->get();
+
         $teachersWithAttendance = $attendances->pluck('teacher_id');
         $teachersWithoutAttendance = $allTeachers->filter(
             fn($t) => !$teachersWithAttendance->contains($t->id)
@@ -86,7 +110,7 @@ class TeacherMonitoringController extends Controller
             'stats' => $stats,
             'schoolYears' => $schoolYears,
             'selectedSchoolYearId' => $schoolYearId,
-            'isReadOnly' => $request->user()->isPrincipal(), // Requirement 11.1
+            'isReadOnly' => $currentUser->isPrincipal(), // Requirement 11.1
         ]);
     }
 
@@ -96,13 +120,20 @@ class TeacherMonitoringController extends Controller
      */
     public function show(Request $request, User $teacher): View
     {
+        $currentUser = $request->user();
+
         // Ensure the user is a teacher
         if (!$teacher->isTeacher()) {
             abort(404, 'Teacher not found.');
         }
 
+        // Ensure teacher belongs to same school (multi-tenancy)
+        if ($currentUser->school_id && $teacher->school_id !== $currentUser->school_id) {
+            abort(403, 'You do not have access to this teacher.');
+        }
+
         $schoolYearId = $request->input('school_year_id');
-        
+
         if (!$schoolYearId) {
             $activeSchoolYear = SchoolYear::active()->first();
             $schoolYearId = $activeSchoolYear?->id;
@@ -126,7 +157,7 @@ class TeacherMonitoringController extends Controller
             'summary' => $summary,
             'schoolYears' => $schoolYears,
             'selectedSchoolYearId' => $schoolYearId,
-            'isReadOnly' => $request->user()->isPrincipal(), // Requirement 11.1
+            'isReadOnly' => $currentUser->isPrincipal(), // Requirement 11.1
         ]);
     }
 

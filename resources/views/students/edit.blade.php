@@ -16,7 +16,7 @@
         <p class="text-sm text-gray-500 dark:text-gray-400">{{ $student->full_name }} ({{ $student->student_id }})</p>
     </div>
 
-    <form method="POST" action="{{ route('students.update', $student) }}">
+    <form method="POST" action="{{ route('students.update', $student) }}" data-validate>
         @csrf
         @method('PUT')
 
@@ -30,6 +30,8 @@
                     :value="old('first_name', $student->first_name)"
                     required
                     placeholder="Enter first name"
+                    minlength="2"
+                    maxlength="50"
                 />
 
                 <x-input 
@@ -39,6 +41,8 @@
                     :value="old('last_name', $student->last_name)"
                     required
                     placeholder="Enter last name"
+                    minlength="2"
+                    maxlength="50"
                 />
 
                 <x-input 
@@ -47,8 +51,12 @@
                     label="LRN (Learner Reference Number)"
                     :value="old('lrn', $student->lrn)"
                     placeholder="12-digit LRN"
-                    hint="Optional - 12-digit unique identifier"
+                    hint="Exactly 12 digits"
+                    required
+                    minlength="12"
                     maxlength="12"
+                    pattern="[0-9]{12}"
+                    title="LRN must be exactly 12 digits"
                 />
 
                 <div>
@@ -72,6 +80,8 @@
                     label="Parent/Guardian Name"
                     :value="old('parent_name', $student->parent_name)"
                     placeholder="Full name"
+                    minlength="2"
+                    maxlength="100"
                 />
 
                 <x-input 
@@ -79,7 +89,12 @@
                     name="parent_phone" 
                     label="Contact Number"
                     :value="old('parent_phone', $student->parent_phone)"
-                    placeholder="Phone number"
+                    placeholder="09171234567"
+                    minlength="11"
+                    maxlength="11"
+                    pattern="09[0-9]{9}"
+                    title="Enter a valid Philippine mobile number (e.g., 09171234567)"
+                    hint="11 digits starting with 09"
                 />
 
                 <x-input 
@@ -88,6 +103,7 @@
                     label="Email Address"
                     :value="old('parent_email', $student->parent_email)"
                     placeholder="email@example.com"
+                    maxlength="255"
                 />
 
                 <div class="md:col-span-2">
@@ -98,6 +114,7 @@
                         name="address" 
                         id="address"
                         rows="2"
+                        maxlength="500"
                         class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:border-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-700"
                         placeholder="Home address"
                     >{{ old('address', $student->address) }}</textarea>

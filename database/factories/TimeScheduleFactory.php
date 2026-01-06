@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\School;
 use App\Models\TimeSchedule;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -26,6 +27,7 @@ class TimeScheduleFactory extends Factory
     public function definition(): array
     {
         return [
+            'school_id' => School::factory(),
             'name' => fake()->words(2, true) . ' Schedule',
             'time_in' => '07:30:00',
             'time_out' => '17:00:00',
@@ -63,6 +65,16 @@ class TimeScheduleFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'late_threshold_minutes' => $minutes,
+        ]);
+    }
+
+    /**
+     * Assign time schedule to a specific school.
+     */
+    public function forSchool(School $school): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => $school->id,
         ]);
     }
 }

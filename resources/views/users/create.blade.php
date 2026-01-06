@@ -15,7 +15,7 @@
         <h1 class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">Add New User</h1>
     </div>
 
-    <form method="POST" action="{{ route('users.store') }}">
+    <form method="POST" action="{{ route('users.store') }}" data-validate>
         @csrf
 
         <!-- Account Information -->
@@ -29,6 +29,10 @@
                     required
                     placeholder="Enter username"
                     autocomplete="off"
+                    minlength="3"
+                    maxlength="50"
+                    pattern="[a-zA-Z0-9_]+"
+                    title="Username can only contain letters, numbers, and underscores"
                 />
 
                 <x-input 
@@ -38,6 +42,8 @@
                     :value="old('full_name')"
                     required
                     placeholder="Enter full name"
+                    minlength="2"
+                    maxlength="100"
                 />
 
                 <x-input 
@@ -46,6 +52,7 @@
                     label="Email Address"
                     :value="old('email')"
                     placeholder="email@example.com"
+                    maxlength="255"
                 />
 
                 <x-select 

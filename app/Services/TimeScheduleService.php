@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\TimeSchedule;
 use App\Models\TimeScheduleLog;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class TimeScheduleService
 {
@@ -20,21 +21,30 @@ class TimeScheduleService
     }
 
     /**
+     * Clear the active time schedule cache.
+     */
+    protected function clearActiveScheduleCache(): void
+    {
+        Cache::forget('active_time_schedule');
+    }
+
+    /**
      * Create a new time schedule with audit logging.
      * (Requirement 7.1)
      *
-     * @param array $data Schedule data
-     * @param int $userId The user creating the schedule
+     * @param  array  $data  Schedule data
+     * @param  int  $userId  The user creating the schedule
      * @return TimeSchedule
      */
     public function create(array $data, int $userId): TimeSchedule
     {
         // Set created_by to the user creating the schedule
         $data['created_by'] = $userId;
-        
+
         // If this is set to be active, deactivate all others first
         if (isset($data['is_active']) && $data['is_active']) {
             TimeSchedule::where('is_active', true)->update(['is_active' => false]);
+            $this->clearActiveScheduleCache();
         }
 
         $schedule = TimeSchedule::create($data);
@@ -56,17 +66,17 @@ class TimeScheduleService
      * Update a time schedule with audit logging.
      * (Requirement 7.2)
      *
-     * @param int $id Schedule ID
-     * @param array $data Updated data
-     * @param int $userId The user making the update
-     * @param string|null $reason Optional reason for the change
+     * @param  int  $id  Schedule ID
+     * @param  array  $data  Updated data
+     * @param  int  $userId  The user making the update
+     * @param  string|null  $reason  Optional reason for the change
      * @return bool
      */
     public function update(int $id, array $data, int $userId, ?string $reason = null): bool
     {
         $schedule = TimeSchedule::find($id);
 
-        if (!$schedule) {
+        if (! $schedule) {
             return false;
         }
 
@@ -74,11 +84,16 @@ class TimeScheduleService
         $oldValues = $schedule->toArray();
 
         // If activating this schedule, deactivate all others first
-        if (isset($data['is_active']) && $data['is_active'] && !$schedule->is_active) {
+        if (isset($data['is_active']) && $data['is_active'] && ! $schedule->is_active) {
             TimeSchedule::where('is_active', true)->update(['is_active' => false]);
         }
 
         $schedule->update($data);
+
+        // Clear cache if schedule is active or becoming active
+        if ($schedule->is_active || (isset($data['is_active']) && $data['is_active'])) {
+            $this->clearActiveScheduleCache();
+        }
 
         // Refresh to get updated values
         $schedule->refresh();
@@ -100,15 +115,15 @@ class TimeScheduleService
      * Activate a time schedule, deactivating all others.
      * (Requirement 7.3)
      *
-     * @param int $id Schedule ID to activate
-     * @param int $userId The user performing the activation
+     * @param  int  $id  Schedule ID to activate
+     * @param  int  $userId  The user performing the activation
      * @return bool
      */
     public function activate(int $id, int $userId): bool
     {
         $schedule = TimeSchedule::find($id);
 
-        if (!$schedule) {
+        if (! $schedule) {
             return false;
         }
 
@@ -117,6 +132,9 @@ class TimeScheduleService
 
         // Activate the specified schedule
         $schedule->update(['is_active' => true]);
+
+        // Clear cache for scan performance
+        $this->clearActiveScheduleCache();
 
         // Log the activation action
         TimeScheduleLog::create([

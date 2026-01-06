@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\School;
 use App\Models\SchoolYear;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -28,6 +29,7 @@ class SchoolYearFactory extends Factory
         $endYear = $startYear + 1;
 
         return [
+            'school_id' => School::factory(),
             'name' => "{$startYear}-{$endYear}",
             'is_active' => false,
             'is_locked' => false,
@@ -53,6 +55,16 @@ class SchoolYearFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'is_locked' => true,
+        ]);
+    }
+
+    /**
+     * Assign school year to a specific school.
+     */
+    public function forSchool(School $school): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'school_id' => $school->id,
         ]);
     }
 }

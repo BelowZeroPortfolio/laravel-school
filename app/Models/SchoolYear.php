@@ -2,13 +2,14 @@
 
 namespace App\Models;
 
+use App\Models\Traits\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SchoolYear extends Model
 {
-    use HasFactory;
+    use HasFactory, BelongsToSchool;
 
     /**
      * The attributes that are mass assignable.
@@ -16,6 +17,7 @@ class SchoolYear extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'school_id',
         'name',
         'is_active',
         'is_locked',

@@ -12,7 +12,12 @@ use App\Http\Controllers\SchoolYearController;
 use App\Http\Controllers\StudentController;
 use App\Http\Controllers\TeacherMonitoringController;
 use App\Http\Controllers\TimeScheduleController;
+use App\Http\Controllers\StudentPlacementController;
+use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\SuperAdmin\DashboardController as SuperAdminDashboardController;
+use App\Http\Controllers\SuperAdmin\SchoolController as SuperAdminSchoolController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -90,6 +95,13 @@ Route::middleware('auth')->group(function () {
     Route::get('/reports/export/csv', [ReportController::class, 'exportCsv'])->name('reports.export.csv');
     Route::get('/reports/export/pdf', [ReportController::class, 'exportPdf'])->name('reports.export.pdf');
     Route::get('/reports/daily-summary', [ReportController::class, 'dailySummary'])->name('reports.daily-summary');
+
+    // Student Placement (Requirements 19.1, 19.2, 19.3, 19.5)
+    Route::get('/student-placements', [StudentPlacementController::class, 'index'])->name('student-placements.index');
+    Route::get('/student-placements/{student}', [StudentPlacementController::class, 'show'])->name('student-placements.show');
+    Route::post('/student-placements/transfer', [StudentPlacementController::class, 'transfer'])->name('student-placements.transfer');
+    Route::post('/student-placements/place', [StudentPlacementController::class, 'place'])->name('student-placements.place');
+    Route::post('/student-placements/bulk-place', [StudentPlacementController::class, 'bulkPlace'])->name('student-placements.bulk-place');
 });
 
 /*
@@ -125,4 +137,27 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/school-years/{school_year}/activate', [SchoolYearController::class, 'activate'])->name('school-years.activate');
     Route::post('/school-years/{school_year}/lock', [SchoolYearController::class, 'lock'])->name('school-years.lock');
     Route::post('/school-years/{school_year}/unlock', [SchoolYearController::class, 'unlock'])->name('school-years.unlock');
+
+    // Subscription Management (Requirements 20.1, 20.2, 20.3)
+    Route::get('/subscriptions', [SubscriptionController::class, 'index'])->name('subscriptions.index');
+    Route::post('/subscriptions/grant', [SubscriptionController::class, 'grantPremium'])->name('subscriptions.grant');
+    Route::post('/subscriptions/revoke', [SubscriptionController::class, 'revokePremium'])->name('subscriptions.revoke');
+
+    // System Settings (Requirements 21.1, 21.2)
+    Route::get('/settings', [SettingsController::class, 'index'])->name('settings.index');
+    Route::put('/settings', [SettingsController::class, 'update'])->name('settings.update');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Super Admin Routes (Multi-Tenancy Management)
+|--------------------------------------------------------------------------
+*/
+Route::middleware(['auth', 'role:super_admin'])->prefix('super-admin')->name('super-admin.')->group(function () {
+    // Super Admin Dashboard
+    Route::get('/', [SuperAdminDashboardController::class, 'index'])->name('dashboard');
+
+    // School Management
+    Route::resource('schools', SuperAdminSchoolController::class);
+    Route::post('/schools/{school}/reactivate', [SuperAdminSchoolController::class, 'reactivate'])->name('schools.reactivate');
 });
